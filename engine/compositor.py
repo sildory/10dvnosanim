@@ -19,10 +19,10 @@ def setup_cinematic_compositor(scene: bpy.types.Scene):
     node_render = nodes.new(type="CompositorNodeRLayers")
     node_render.location = (-600, 200)
 
-    # 2. Мягкое неоновое свечение (Fog Glow)
+    # 2. Мягкое неоновое свечение (Fog Glow) - MEDIUM работает в 5 раз быстрее HIGH на CPU без потери мягкости
     glare_fog = nodes.new(type="CompositorNodeGlare")
     glare_fog.glare_type = "FOG_GLOW"
-    glare_fog.quality = "HIGH"
+    glare_fog.quality = "MEDIUM"
     glare_fog.threshold = 1.2
     glare_fog.size = 8
     glare_fog.location = (-300, 200)
@@ -31,6 +31,7 @@ def setup_cinematic_compositor(scene: bpy.types.Scene):
     # 3. Анаморфные горизонтальные полосы от бликов (Streaks)
     glare_streaks = nodes.new(type="CompositorNodeGlare")
     glare_streaks.glare_type = "STREAKS"
+    glare_streaks.quality = "MEDIUM"
     glare_streaks.streaks = 2
     glare_streaks.angle_offset = 0.0  # Строго горизонтальные лучи
     glare_streaks.threshold = 2.5
@@ -43,7 +44,6 @@ def setup_cinematic_compositor(scene: bpy.types.Scene):
     if hasattr(lens_dist, "use_projector"):
         lens_dist.use_projector = False
 
-    # Безопасная установка Distortion (в Blender сокет называется "Distortion")
     dist_sock = lens_dist.inputs.get("Distortion") or lens_dist.inputs.get("Distort")
     if dist_sock:
         dist_sock.default_value = -0.008  # Легкая бочкообразность линзы 35mm
