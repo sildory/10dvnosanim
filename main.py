@@ -1,8 +1,8 @@
 """
 Главный исполнительный скрипт 3DVNOSANIM.
 Поддерживает запуск:
-  1) Напрямую через Python:  python main.py --episode ep01_bay [args]
-  2) Через бинарник Blender: blender -b -P main.py -- --episode ep01_bay [args]
+  1) Напрямую через Python:  python main.py --episode ep01_anticipation [args]
+  2) Через бинарник Blender: blender -b -P main.py -- --episode ep01_anticipation [args]
 """
 
 import sys
@@ -39,8 +39,8 @@ def parse_arguments():
     parser.add_argument(
         "--episode",
         type=str,
-        default="ep01_bay",
-        help="Имя эпизода из каталога episodes/ (например: ep01_bay)"
+        default="ep01_anticipation",
+        help="Имя эпизода из каталога episodes/ (например: ep01_anticipation)"
     )
     parser.add_argument(
         "--project",
@@ -49,7 +49,7 @@ def parse_arguments():
         help="Альтернативный путь/проект"
     )
     parser.add_argument("--start", type=int, default=1, help="Начальный кадр диапазона")
-    parser.add_argument("--end", type=int, default=60, help="Конечный кадр диапазона")
+    parser.add_argument("--end", type=int, default=180, help="Конечный кадр диапазона")
     parser.add_argument("--step", type=int, default=1, help="Шаг рендера кадров")
     parser.add_argument(
         "--profile",
@@ -65,42 +65,49 @@ def parse_arguments():
 
 
 def load_target_module(target_name: str):
-    """Ищет модуль в папках episodes и projects без маскировки внутренних ошибок."""
-    candidates = [
-        f"episodes.{target_name}",
-        f"projects.{target_name}.scene",
-        f"projects.{target_name}",
-        target_name
-    ]
+    """Ищет модуль в папке episodes/ с понятным выводом доступных вариантов."""
+    if target_name.endswith(".py"):
+        target_name = target_name[:-3]
 
-    last_error = None
-    for candidate in candidates:
+    episodes_dir = os.path.join(CURRENT_DIR, "episodes")
+    available_episodes = []
+    if os.path.isdir(episodes_dir):
+        available_episodes = [
+            f[:-3] for f in os.listdir(episodes_dir)
+            if f.endswith(".py") and not f.startswith("__")
+        ]
+
+    episode_path = os.path.join(episodes_dir, f"{target_name}.py")
+    if os.path.isfile(episode_path):
+        module_name = f"episodes.{target_name}"
         try:
-            mod = importlib.import_module(candidate)
-            return mod, candidate
-        except ModuleNotFoundError as err:
-            # Если ошибка произошла внутри загружаемого файла — выводим полный стек
-            if err.name != candidate and not str(err).endswith(candidate):
-                print(f"\n[FATAL] Ошибка внутри модуля '{candidate}':")
-                traceback.print_exc()
-                sys.exit(1)
-            last_error = err
-            continue
+            mod = importlib.import_module(module_name)
+            return mod, module_name
         except Exception:
-            print(f"\n[FATAL] Ошибка синтаксиса или логики в '{candidate}':")
+            print(f"\n[FATAL] Ошибка синтаксиса или логики внутри '{episode_path}':")
             traceback.print_exc()
             sys.exit(1)
 
-    print(f"\n[FATAL] Не удалось загрузить сценарий '{target_name}'. Перебраны пути: {candidates}")
-    if last_error:
-        print(f"Причина: {last_error}")
+    try:
+        mod = importlib.import_module(target_name)
+        return mod, target_name
+    except Exception:
+        pass
+
+    print("\n" + "!" * 72)
+    print(f" [ОШИБКА] Эпизод с именем '{target_name}' НЕ НАЙДЕН!")
+    print("!" * 72)
+    print(" Доступные готовые эпизоды в папке episodes/:")
+    for ep in sorted(available_episodes):
+        print(f"   -> {ep}")
+    print("\n Пожалуйста, укажите одно из доступных имен.")
+    print("!" * 72 + "\n")
     sys.exit(1)
 
 
 def sync_manifest_if_exists(target_name: str):
-    """Проверяет наличие manifest.json в projects/<target> или episodes/."""
+    """Проверяет наличие manifest.json в папке episodes/."""
     candidates = [
-        os.path.join(CURRENT_DIR, "projects", target_name, "manifest.json"),
         os.path.join(CURRENT_DIR, "episodes", f"{target_name}.manifest.json"),
     ]
     for path in candidates:
@@ -120,20 +127,15 @@ def main():
 
     random.seed(42)
 
-    # 1. Безопасная очистка сцены
     clear_scene()
 
-    # 2. Гарантируем корректность активной коллекции
     bpy.context.view_layer.active_layer_collection = bpy.context.view_layer.layer_collection
 
-    # 3. Синхронизация манифеста ассетов
     sync_manifest_if_exists(target_name)
 
-    # 4. Загрузка сценария
     module, loaded_path = load_target_module(target_name)
     print(f"[ENGINE] Подключен модуль сценария: {loaded_path}")
 
-    # 5. Построение сцены
     if hasattr(module, "build"):
         module.build()
     elif hasattr(module, "build_scene"):
@@ -142,7 +144,6 @@ def main():
         print(f"[FATAL] В модуле '{loaded_path}' отсутствует функция build() или build_scene().")
         sys.exit(1)
 
-    # 6. Запуск рендера
     execute_render(
         scene=bpy.context.scene,
         output_dir=args.output,
@@ -155,4 +156,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main() 
