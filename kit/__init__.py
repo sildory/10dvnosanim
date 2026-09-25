@@ -3,6 +3,10 @@
 """
 
 from kit.prefabs import (
+    make_marble_island,
+    make_food_bowl,
+    make_grain_scoop,
+    make_stylized_parrot,
     make_cables,
     make_ocean,
     make_rain,
@@ -14,6 +18,10 @@ from kit.prefabs import (
 )
 
 __all__ = [
+    "make_marble_island",
+    "make_food_bowl",
+    "make_grain_scoop",
+    "make_stylized_parrot",
     "make_cables",
     "make_ocean",
     "make_rain",
