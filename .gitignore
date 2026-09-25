@@ -1,9 +1,12 @@
-# Временные кадры и видео
+# Временные рендеры и видео
 output/
 *.mp4
 *.png
 *.jpg
 *.exr
+
+# Кэш внешних ассетов (Poly Haven / ambientCG)
+assets_cache/
 
 # Кэш Python
 __pycache__/
