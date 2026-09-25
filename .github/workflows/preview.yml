@@ -4,9 +4,16 @@ on:
   workflow_dispatch:
     inputs:
       episode:
-        description: 'Имя эпизода для рендера'
+        description: 'Выберите эпизод для превью'
         required: true
-        default: 'ep01_bay'
+        type: choice
+        default: 'ep01_anticipation'
+        options:
+          - 'ep01_anticipation'
+          - 'ep02_unequal_pour'
+          - 'ep03_disbelief'
+          - 'ep04_tantrum'
+          - 'ep05_sabotage'
       start_frame:
         description: 'Начальный кадр'
         required: true
@@ -14,7 +21,7 @@ on:
       end_frame:
         description: 'Конечный кадр'
         required: true
-        default: '60'
+        default: '180'
 
 jobs:
   preview:
@@ -41,30 +48,30 @@ jobs:
         uses: actions/cache@v4
         with:
           path: assets_cache
-          key: assets-${{ hashFiles('episodes/**', 'projects/**') }}
+          key: assets-${{ hashFiles('episodes/**') }}
           restore-keys: |
             assets-
 
-      - name: 5. Быстрый рендер превью-кадров (540p, Cycles Turbo)
+      - name: 5. Быстрый рендер превью-кадров (Cycles Fast)
         run: |
           python main.py \
-            --episode "${{ github.event.inputs.episode || 'ep01_bay' }}" \
-            --start "${{ github.event.inputs.start_frame || 1 }}" \
-            --end "${{ github.event.inputs.end_frame || 60 }}" \
+            --episode "${{ github.event.inputs.episode }}" \
+            --start "${{ github.event.inputs.start_frame }}" \
+            --end "${{ github.event.inputs.end_frame }}" \
             --step 1 \
             --profile preview \
             --output output/frames
 
-      - name: 6. Сборка видео через FFmpeg (Glob-паттерн для любых диапазонов)
+      - name: 6. Сборка видео через FFmpeg
         run: |
           mkdir -p output/video
           ffmpeg -y -framerate 30 -pattern_type glob -i 'output/frames/frame_*.png' \
             -c:v libx264 -pix_fmt yuv420p -preset fast -crf 20 \
-            "output/video/preview_${{ github.event.inputs.episode || 'ep01_bay' }}.mp4"
+            "output/video/preview_${{ github.event.inputs.episode }}.mp4"
 
       - name: 7. Загрузка готового MP4 в артефакты
         uses: actions/upload-artifact@v4
         with:
-          name: preview-video
+          name: preview-${{ github.event.inputs.episode }}
           path: output/video/preview_*.mp4
           retention-days: 7
