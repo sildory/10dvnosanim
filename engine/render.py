@@ -81,6 +81,11 @@ def execute_render(
     t_start = time.time()
 
     for current_frame in range(start_frame, end_frame + 1, step):
+        target_path = os.path.join(output_dir, f"frame_{current_frame:04d}.png")
+        if os.path.isfile(target_path) and os.path.getsize(target_path) > 1024:
+            print(f"[CYCLES] Кадр {current_frame:04d} уже есть на диске, пропуск.")
+            continue
+
         frame_t0 = time.time()
         scene.frame_set(current_frame)
 
@@ -90,7 +95,6 @@ def execute_render(
         if scene.camera is None:
             raise RuntimeError(f"[FATAL] В сцене отсутствует активная камера на кадре {current_frame}!")
 
-        target_path = os.path.join(output_dir, f"frame_{current_frame:04d}.png")
         scene.render.filepath = target_path
 
         bpy.ops.render.render(write_still=True)
