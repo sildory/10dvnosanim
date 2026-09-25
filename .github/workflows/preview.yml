@@ -2,11 +2,24 @@ name: Fast Preview Render
 
 on:
   workflow_dispatch:
+    inputs:
+      episode:
+        description: 'Имя эпизода для рендера'
+        required: true
+        default: 'ep01_bay'
+      start_frame:
+        description: 'Начальный кадр'
+        required: true
+        default: '1'
+      end_frame:
+        description: 'Конечный кадр'
+        required: true
+        default: '60'
 
 jobs:
   preview:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: 1. Клонирование репозитория
@@ -27,24 +40,30 @@ jobs:
         uses: actions/cache@v4
         with:
           path: assets_cache
-          key: assets-${{ hashFiles('projects/**/manifest.json') }}
+          key: assets-${{ hashFiles('episodes/**', 'projects/**') }}
           restore-keys: |
             assets-
 
       - name: 5. Быстрый рендер превью-кадров (540p, Cycles CPU)
         run: |
-          python main.py --project test_studio --start 1 --end 60 --step 1 --profile preview --output output/frames
+          python main.py \
+            --episode ${{ github.event.inputs.episode || 'ep01_bay' }} \
+            --start ${{ github.event.inputs.start_frame || 1 }} \
+            --end ${{ github.event.inputs.end_frame || 60 }} \
+            --step 1 \
+            --profile preview \
+            --output output/frames
 
       - name: 6. Сборка видео через FFmpeg
         run: |
           mkdir -p output/video
           ffmpeg -y -framerate 30 -i output/frames/frame_%04d.png \
             -c:v libx264 -pix_fmt yuv420p -preset fast -crf 20 \
-            output/video/preview_test_studio.mp4
+            output/video/preview_${{ github.event.inputs.episode || 'ep01_bay' }}.mp4
 
       - name: 7. Загрузка готового MP4 в артефакты
         uses: actions/upload-artifact@v4
         with:
           name: preview-video
-          path: output/video/preview_test_studio.mp4
-          retention-days: 7
+          path: output/video/preview_*.mp4
+          retentio n-days: 7
