@@ -7,21 +7,25 @@ import bpy
 
 
 def setup_volume_fog(
-    bounds=(60.0, 60.0, 25.0),
-    location=(0.0, 0.0, 10.0),
-    density: float = 0.015,
-    anisotropy: float = 0.65,
+    bounds=(50.0, 50.0, 20.0),
+    location=(0.0, 0.0, 8.0),
+    density: float = 0.012,
+    anisotropy: float = 0.7,
     color=(0.85, 0.92, 1.0)
 ) -> bpy.types.Object:
     """
     Создает волюметрический контейнер с прямым рассеиванием света.
-    anisotropy = 0.65 концентрирует свет в направленный кинематографический луч.
+    Оптимизирован для быстрого просчета лучей в Cycles CPU.
     """
     bpy.ops.mesh.primitive_cube_add(size=1.0, location=location)
     box = bpy.context.active_object
     box.name = "Volume_Atmosphere_Container"
     box.scale = bounds
     box.display_type = "WIRE"
+
+    # Отключаем отбрасывание жестких теней самим кубом тумана
+    if hasattr(box, "visible_shadow"):
+        box.visible_shadow = False
 
     mat = bpy.data.materials.new(name="Volumetric_Fog_Shader")
     mat.use_nodes = True
@@ -39,5 +43,5 @@ def setup_volume_fog(
     links.new(vol.outputs["Volume"], node_out.inputs["Volume"])
     box.data.materials.append(mat)
 
-    print(f"[ATMOSPHERE] Объемный туман активирован: плотность={density}, анизотропия={anisotropy}")
+    print(f"[ATMOSPHERE] Быстрый объемный туман активирован: плотность={density}, анизотропия={anisotropy}")
     return box
