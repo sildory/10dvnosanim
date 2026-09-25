@@ -1,4 +1,4 @@
-name: Render Movie (All Episodes)
+name: Render Movie (All Episodes - 20 Max Shards)
 
 on:
   workflow_dispatch:
@@ -13,7 +13,7 @@ on:
           - 'fullhd'
           - '4k'
       output_name:
-        description: 'Имя итогового видеофайла (без .mp4)'
+        description: 'Имя итогового фильма (без .mp4)'
         required: false
         default: 'master_movie'
 
@@ -21,49 +21,82 @@ permissions:
   contents: write
 
 jobs:
-  # ЭТАП 1: Автоматический поиск всех эпизодов в папке episodes/
-  discover-episodes:
-    name: "Discover Episodes"
+  # =========================================================================
+  # ЭТАП 1: Поиск эпизодов и генерация 20 шардов под максимальный лимит GitHub
+  # =========================================================================
+  plan-shards:
+    name: "Plan Parallel Shards (Max 20)"
     runs-on: ubuntu-latest
     outputs:
-      episodes: ${{ steps.list-episodes.outputs.episodes }}
-      count: ${{ steps.list-episodes.outputs.count }}
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
+      episodes: ${{ steps.build-matrix.outputs.episodes }}
+      total_jobs: ${{ steps.build-matrix.outputs.total_jobs }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Scan episodes directory
-        id: list-episodes
+      - name: Calculate 20 Shards Matrix
+        id: build-matrix
         run: |
           python -c "
-          import os, json, sys
+          import os, json, sys, math
+
           ep_dir = 'episodes'
           if not os.path.isdir(ep_dir):
               print(f'Error: folder {ep_dir} not found', file=sys.stderr)
               sys.exit(1)
-          files = sorted([
+
+          episodes = sorted([
               f[:-3] for f in os.listdir(ep_dir)
               if f.startswith('ep') and f.endswith('.py') and not f.startswith('__')
           ])
-          if not files:
+
+          if not episodes:
               print('Error: no episodes found in episodes/', file=sys.stderr)
               sys.exit(1)
-          print(f'Discovered {len(files)} episodes: {files}')
+
+          num_episodes = len(episodes)
+          # Максимальный лимит для бесплатного аккаунта GitHub Actions - 20 параллельных задач
+          MAX_CONCURRENT_JOBS = 20
+          shards_per_ep = max(1, MAX_CONCURRENT_JOBS // num_episodes)
+          total_frames = 180
+
+          matrix_include = []
+          for ep in episodes:
+              frames_per_shard = math.ceil(total_frames / shards_per_ep)
+              for s in range(shards_per_ep):
+                  start = s * frames_per_shard + 1
+                  end = min((s + 1) * frames_per_shard, total_frames)
+                  if start <= total_frames:
+                      matrix_include.append({
+                          'episode': ep,
+                          'shard': s + 1,
+                          'start': start,
+                          'end': end
+                      })
+
+          print(f'Configured {len(matrix_include)} parallel shards for {num_episodes} episodes.')
+          for item in matrix_include:
+              print(f\"  -> {item['episode']} [shard {item['shard']}]: frames {item['start']}..{item['end']}\")
+
           with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
-              out.write(f'episodes={json.dumps(files)}\n')
-              out.write(f'count={len(files)}\n')
+              out.write(f'matrix={json.dumps(matrix_include)}\n')
+              out.write(f'episodes={json.dumps(episodes)}\n')
+              out.write(f'total_jobs={len(matrix_include)}\n')
           "
 
-  # ЭТАП 2: Параллельный рендер каждого найденного эпизода на отдельном раннере
-  render-episodes:
-    name: "Render: ${{ matrix.episode }}"
-    needs: discover-episodes
+  # =========================================================================
+  # ЭТАП 2: Параллельный рендер 20 шардов на независимых раннерах
+  # =========================================================================
+  render-shards:
+    name: "${{ matrix.episode }} [${{ matrix.start }}..${{ matrix.end }}]"
+    needs: plan-shards
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        episode: ${{ fromJson(needs.discover-episodes.outputs.episodes) }}
+        include: ${{ fromJson(needs.plan-shards.outputs.matrix) }}
 
     steps:
       - name: 1. Клонирование репозитория
@@ -77,11 +110,12 @@ jobs:
 
       - name: 3. Установка системных библиотек и зависимостей bpy
         run: |
-          sudo apt-get update && sudo apt-get install -y libxxf86vm1 libgl1 libxfixes3 libxi6 libxkbcommon0 ffmpeg
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends \
+            libxxf86vm1 libgl1 libxfixes3 libxi6 libxkbcommon0
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: 4. Кэширование ассетов
+      - name: 4. Кэширование ассетов (HDRI / PBR)
         uses: actions/cache@v4
         with:
           path: assets_cache
@@ -89,39 +123,31 @@ jobs:
           restore-keys: |
             assets-
 
-      - name: 5. Рендер эпизода
+      - name: 5. Рендер диапазона кадров шардом
         run: |
           python main.py \
             --episode "${{ matrix.episode }}" \
+            --start "${{ matrix.start }}" \
+            --end "${{ matrix.end }}" \
+            --step 1 \
             --profile "${{ github.event.inputs.profile || 'preview' }}" \
             --output "output/frames/${{ matrix.episode }}"
 
-      - name: 6. Сборка видео эпизода (H.264, 30 FPS, BT.709)
-        run: |
-          mkdir -p output/episodes_video
-          ffmpeg -y -framerate 30 -pattern_type glob -i "output/frames/${{ matrix.episode }}/frame_*.png" \
-            -c:v libx264 \
-            -preset fast \
-            -crf 17 \
-            -pix_fmt yuv420p \
-            -color_primaries bt709 \
-            -color_trc bt709 \
-            -colorspace bt709 \
-            "output/episodes_video/${{ matrix.episode }}.mp4"
-
-      - name: 7. Загрузка видео-артефакта эпизода
+      - name: 6. Сохранение кадров шарда в артефакты
         uses: actions/upload-artifact@v4
         with:
-          name: "video-${{ matrix.episode }}"
-          path: "output/episodes_video/${{ matrix.episode }}.mp4"
-          retention-days: 2
+          name: "frames-${{ matrix.episode }}-shard-${{ matrix.shard }}"
+          path: "output/frames/${{ matrix.episode }}/*.png"
+          retention-days: 1
 
-  # ЭТАП 3: Автоматическая склейка всех эпизодов по порядку и публикация в Releases
+  # =========================================================================
+  # ЭТАП 3: Сборка всех кадров, генерация видео эпизодов и склейка фильма
+  # =========================================================================
   assemble-movie:
-    name: "Assemble Movie & Publish Release"
-    needs: [discover-episodes, render-episodes]
+    name: "Assemble Movie & Publish"
+    needs: [plan-shards, render-shards]
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 25
 
     steps:
       - name: 1. Клонирование репозитория
@@ -130,59 +156,130 @@ jobs:
       - name: 2. Установка FFmpeg
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
-      - name: 3. Создание рабочих папок
+      - name: 3. Создание структуры папок
         run: |
-          mkdir -p output/downloaded
+          mkdir -p output/downloaded_shards
+          mkdir -p output/episodes_frames
+          mkdir -p output/episodes_video
           mkdir -p output/movie
 
-      - name: 4. Скачивание всех отрендеренных видео
+      - name: 4. Скачивание всех отрендеренных шардов кадров
         uses: actions/download-artifact@v4
         with:
-          pattern: "video-*"
-          path: output/downloaded
-          merge-multiple: true
+          pattern: "frames-*"
+          path: output/downloaded_shards
 
-      - name: 5. Автоматическая генерация списка склейки в алфавитном порядке
+      - name: 5. Сортировка кадров по эпизодам и кодирование видео
         run: |
           python -c "
-          import os, sys
-          dl_dir = 'output/downloaded'
-          mp4s = sorted([f for f in os.listdir(dl_dir) if f.endswith('.mp4')])
-          print(f'Found {len(mp4s)} videos to assemble: {mp4s}')
-          if not mp4s:
-              print('Error: no MP4 files found for assembly!', file=sys.stderr)
+          import os, shutil, glob, subprocess, sys
+
+          shards_root = 'output/downloaded_shards'
+          ep_frames_root = 'output/episodes_frames'
+          ep_video_root = 'output/episodes_video'
+
+          episodes_map = {}
+
+          # Поиск всех файлов frame_XXXX.png во всех скачанных папках шардов
+          for root, dirs, files in os.walk(shards_root):
+              for fname in files:
+                  if fname.startswith('frame_') and fname.endswith('.png'):
+                      dir_name = os.path.basename(root)
+                      # Формат имени артефакта: frames-<episode_name>-shard-<N>
+                      parts = dir_name.split('-')
+                      if len(parts) >= 3 and parts[0] == 'frames':
+                          ep_name = '-'.join(parts[1:-2])
+                      else:
+                          ep_name = 'unknown'
+
+                      if ep_name not in episodes_map:
+                          episodes_map[ep_name] = []
+
+                      full_path = os.path.join(root, fname)
+                      episodes_map[ep_name].append((fname, full_path))
+
+          if not episodes_map:
+              print('Error: no rendered frames found in downloaded shards!', file=sys.stderr)
               sys.exit(1)
+
+          sorted_episodes = sorted(episodes_map.keys())
+          print(f'Found rendered frames for {len(sorted_episodes)} episodes: {sorted_episodes}')
+
+          assembled_videos = []
+
+          for ep in sorted_episodes:
+              frames = episodes_map[ep]
+              ep_dir = os.path.join(ep_frames_root, ep)
+              os.makedirs(ep_dir, exist_ok=True)
+
+              for fname, src_path in frames:
+                  dst_path = os.path.join(ep_dir, fname)
+                  if not os.path.exists(dst_path):
+                      shutil.copy2(src_path, dst_path)
+
+              collected_count = len(glob.glob(os.path.join(ep_dir, 'frame_*.png')))
+              print(f'Episode {ep}: collected {collected_count} frames.')
+
+              out_mp4 = os.path.abspath(os.path.join(ep_video_root, f'{ep}.mp4'))
+              cmd = [
+                  'ffmpeg', '-y',
+                  '-framerate', '30',
+                  '-pattern_type', 'glob',
+                  '-i', f'{ep_dir}/frame_*.png',
+                  '-c:v', 'libx264',
+                  '-preset', 'fast',
+                  '-crf', '17',
+                  '-pix_fmt', 'yuv420p',
+                  '-color_primaries', 'bt709',
+                  '-color_trc', 'bt709',
+                  '-colorspace', 'bt709',
+                  out_mp4
+              ]
+              res = subprocess.run(cmd, capture_output=True, text=True)
+              if res.returncode != 0:
+                  print(f'Error encoding {ep}:\n{res.stderr}', file=sys.stderr)
+                  sys.exit(1)
+              print(f'Successfully built video: {out_mp4}')
+              assembled_videos.append(out_mp4)
+
+          # Создание файла со списком для бесшовной склейки
           with open('concat_list.txt', 'w', encoding='utf-8') as f:
-              for name in mp4s:
-                  full_path = os.path.abspath(os.path.join(dl_dir, name))
-                  f.write(f\"file '{full_path}'\n\")
-          print('Generated concat_list.txt:')
+              for v in assembled_videos:
+                  f.write(f\"file '{v}'\n\")
+
+          print('Concat list created:')
           with open('concat_list.txt') as f:
               print(f.read())
           "
 
-      - name: 6. Бесшовная склейка в единый мастер-фильм без пережатия (-c copy)
+      - name: 6. Склейка всех эпизодов в единый мастер-фильм (-c copy)
         run: |
           OUT_NAME="${{ github.event.inputs.output_name || 'master_movie' }}"
           ffmpeg -y -f concat -safe 0 -i concat_list.txt \
             -c copy \
             "output/movie/${OUT_NAME}.mp4"
 
-      - name: 7. Загрузка финального фильма в артефакты
+      - name: 7. Загрузка фильма в артефакты
         uses: actions/upload-artifact@v4
         with:
           name: "${{ github.event.inputs.output_name || 'master_movie' }}-${{ github.event.inputs.profile }}"
-          path: "output/movie/*.mp4"
+          path: output/movie/*.mp4
           retention-days: 14
 
-      - name: 8. Публикация в GitHub Releases
+      - name: 8. Загрузка видео каждого эпизода отдельно в артефакты
+        uses: actions/upload-artifact@v4
+        with:
+          name: "all-episodes-individual-videos"
+          path: output/episodes_video/*.mp4
+          retention-days: 7
+
+      - name: 9. Публикация в GitHub Releases
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           OUT_NAME="${{ github.event.inputs.output_name || 'master_movie' }}"
           PROFILE="${{ github.event.inputs.profile }}"
-          COUNT="${{ needs.discover-episodes.outputs.count }}"
           TAG="movie-$(date +'%Y%m%d-%H%M%S')"
           gh release create "$TAG" "output/movie/${OUT_NAME}.mp4" \
-            --title "${OUT_NAME} (${PROFILE}, ${COUNT} ep) - ${TAG}" \
-            --notes "Автоматическая мастер-сборка фильма из ${COUNT} эпизодов (${PROFILE}), отрендеренных параллельно в GitHub Actions."
+            --title "${OUT_NAME} (${PROFILE}) - ${TAG}" \
+            --notes "Автоматическая сборка фильма с параллельным рендером на 20 шардах GitHub Actions." 
