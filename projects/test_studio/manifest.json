@@ -1,0 +1,17 @@
+{
+  "polyhaven": [
+    {
+      "id": "dikhololo_night",
+      "type": "hdris",
+      "resolution": "2k",
+      "format": "hdr"
+    }
+  ],
+  "ambientcg": [
+    {
+      "id": "Asphalt012",
+      "resolution": "2K",
+      "filetype": "JPG"
+    }
+  ]
+}
