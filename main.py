@@ -11,7 +11,6 @@ import argparse
 import importlib
 import random
 
-# Гарантируем видимость корневой директории движка
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 if CURRENT_DIR not in sys.path:
     sys.path.insert(0, CURRENT_DIR)
@@ -24,12 +23,12 @@ except ModuleNotFoundError:
     print("или запустите скрипт через Blender: 'blender -b -P main.py -- [args]'\n")
     sys.exit(1)
 
+from engine.assets import get_asset_manager
 from engine.render import clear_scene, execute_render
 
 
 def parse_arguments():
     raw_args = sys.argv
-    # Если запуск идет через 'blender -b -P script.py -- args', берем все после '--'
     if "--" in raw_args:
         cli_args = raw_args[raw_args.index("--") + 1:]
     else:
@@ -65,7 +64,6 @@ def parse_arguments():
 
 
 def load_project_module(project_name: str, episode_name: str = None):
-    """Динамически загружает модуль сцены проекта или эпизода."""
     candidates = []
     if project_name:
         candidates.append(f"projects.{project_name}.scene")
@@ -84,6 +82,15 @@ def load_project_module(project_name: str, episode_name: str = None):
     sys.exit(1)
 
 
+def check_and_fetch_manifest(project_name: str):
+    """Автоматически находит и загружает manifest.json проекта перед построением сцены."""
+    manifest_path = os.path.join(CURRENT_DIR, "projects", project_name, "manifest.json")
+    if os.path.isfile(manifest_path):
+        print(f"[ENGINE] Обнаружен манифест ассетов: {manifest_path}")
+        asset_mgr = get_asset_manager()
+        asset_mgr.fetch_from_manifest(manifest_path)
+
+
 def main():
     args = parse_arguments()
     active_target = args.project if args.project else args.episode
@@ -92,17 +99,21 @@ def main():
     print(f"      3DVNOSANIM // ПОСТАНОВКА ПРОЕКТА: {str(active_target).upper()}")
     print("=" * 70)
 
-    # 1. Фиксация генератора случайных чисел для детерминированности рендера
+    # 1. Фиксация детерминизма
     random.seed(42)
 
-    # 2. Полная очистка сцены перед сборкой
+    # 2. Очистка сцены
     clear_scene()
 
-    # 3. Динамическая загрузка проекта
+    # 3. Автоматическая синхронизация ассетов по manifest.json (если есть)
+    if args.project:
+        check_and_fetch_manifest(args.project)
+
+    # 4. Динамическая загрузка сценария
     module, loaded_path = load_project_module(args.project, args.episode)
     print(f"[ENGINE] Успешно подключен модуль: {loaded_path}")
 
-    # 4. Сборка сцены
+    # 5. Сборка сцены
     if hasattr(module, "build_scene"):
         module.build_scene()
     elif hasattr(module, "build"):
@@ -111,7 +122,7 @@ def main():
         print(f"[FATAL] В модуле '{loaded_path}' не найдена функция build_scene() или build().")
         sys.exit(1)
 
-    # 5. Запуск рендера
+    # 6. Запуск рендера
     execute_render(
         scene=bpy.context.scene,
         output_dir=args.output,
@@ -124,4 +135,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main() 
