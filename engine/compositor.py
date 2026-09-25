@@ -1,4 +1,8 @@
-"""Модуль кинематографического композера: Glare (Fog Glow + Streaks), Chromatic Aberration, Color Grading."""
+"""
+Модуль кинематографического композера: 
+Glare (Fog Glow + Streaks), Chromatic Aberration, Color Grading.
+Полная совместимость с версиями Blender 4.x+.
+"""
 
 import bpy
 
@@ -24,7 +28,7 @@ def setup_cinematic_compositor(scene: bpy.types.Scene):
     glare_fog.location = (-300, 200)
     links.new(node_render.outputs["Image"], glare_fog.inputs["Image"])
 
-    # 3. Анаморфные горизонтальные полосы от фар/неона (Streaks)
+    # 3. Анаморфные горизонтальные полосы от бликов (Streaks)
     glare_streaks = nodes.new(type="CompositorNodeGlare")
     glare_streaks.glare_type = "STREAKS"
     glare_streaks.streaks = 2
@@ -34,23 +38,34 @@ def setup_cinematic_compositor(scene: bpy.types.Scene):
     glare_streaks.location = (0, 200)
     links.new(glare_fog.outputs["Image"], glare_streaks.inputs["Image"])
 
-    # 4. Оптическая дисперсия (Хроматическая аберрация по краям линзы)
+    # 4. Оптическая дисперсия и хроматическая аберрация (Lens Distortion)
     lens_dist = nodes.new(type="CompositorNodeLensdist")
-    lens_dist.use_projector = False
-    lens_dist.inputs["Distort"].default_value = -0.008  # Легкая бочкообразность линзы 35mm
-    lens_dist.inputs["Dispersion"].default_value = 0.012  # Физическое расхождение спектра
+    if hasattr(lens_dist, "use_projector"):
+        lens_dist.use_projector = False
+
+    # Безопасная установка Distortion (в Blender сокет называется "Distortion")
+    dist_sock = lens_dist.inputs.get("Distortion") or lens_dist.inputs.get("Distort")
+    if dist_sock:
+        dist_sock.default_value = -0.008  # Легкая бочкообразность линзы 35mm
+
+    disp_sock = lens_dist.inputs.get("Dispersion")
+    if disp_sock:
+        disp_sock.default_value = 0.012  # Физическое расхождение спектра по краям
+
     lens_dist.location = (300, 200)
     links.new(glare_streaks.outputs["Image"], lens_dist.inputs["Image"])
 
-    # 5. Нуарный цветовой грейдинг (Color Balance: Lift / Gamma / Gain)
+    # 5. Кинематографический цветовой грейдинг (Color Balance: Lift / Gamma / Gain)
     color_balance = nodes.new(type="CompositorNodeColorBalance")
-    color_balance.correction_method = "LIFT_GAMMA_GAIN"
-    # Тени (Lift): холодная синева нуара
-    color_balance.lift = (0.92, 0.96, 1.04)
-    # Полутона (Gamma): чистый контраст
-    color_balance.gamma = (0.98, 1.0, 1.02)
-    # Блики (Gain): теплый отблеск
-    color_balance.gain = (1.04, 1.01, 0.97)
+    if hasattr(color_balance, "correction_method"):
+        color_balance.correction_method = "LIFT_GAMMA_GAIN"
+    if hasattr(color_balance, "lift"):
+        color_balance.lift = (0.92, 0.96, 1.04)  # Тени: холодная синева
+    if hasattr(color_balance, "gamma"):
+        color_balance.gamma = (0.98, 1.0, 1.02)  # Полутона: контраст
+    if hasattr(color_balance, "gain"):
+        color_balance.gain = (1.04, 1.01, 0.97)  # Блики: теплый свет
+
     color_balance.location = (600, 200)
     links.new(lens_dist.outputs["Image"], color_balance.inputs["Image"])
 
