@@ -18,17 +18,12 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
-      - name: 3. Установка системных зависимостей
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg libgl1 libxxf86vm1 libxfixes3 libxi6 libxkbcommon0
-
-      - name: 4. Установка bpy и зависимостей Python
+      - name: 3. Установка bpy и Python-зависимостей
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: 5. Кэширование ассетов (Poly Haven & ambientCG)
+      - name: 4. Кэширование ассетов
         uses: actions/cache@v4
         with:
           path: assets_cache
@@ -36,20 +31,20 @@ jobs:
           restore-keys: |
             assets-
 
-      - name: 6. Быстрый рендер превью-кадров (540p, 16 сэмплов)
+      - name: 5. Быстрый рендер превью-кадров (540p, Cycles CPU)
         run: |
           python main.py --project test_studio --start 1 --end 60 --step 1 --profile preview --output output/frames
 
-      - name: 7. Сборка видео через FFmpeg
+      - name: 6. Сборка видео через FFmpeg
         run: |
           mkdir -p output/video
           ffmpeg -y -framerate 30 -i output/frames/frame_%04d.png \
             -c:v libx264 -pix_fmt yuv420p -preset fast -crf 20 \
             output/video/preview_test_studio.mp4
 
-      - name: 8. Загрузка готового MP4 в артефакты
+      - name: 7. Загрузка готового MP4 в артефакты
         uses: actions/upload-artifact@v4
         with:
           name: preview-video
           path: output/video/preview_test_studio.mp4
-          retenti on-days: 7
+          retention-days: 7
