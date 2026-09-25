@@ -45,10 +45,6 @@ class AssetManager:
                 os.remove(temp_path)
             raise
 
-    # =========================================================================
-    # POLY HAVEN API (api.polyhaven.com)
-    # =========================================================================
-
     def polyhaven(
         self,
         asset_id: str,
@@ -58,9 +54,6 @@ class AssetManager:
     ) -> str:
         """
         Запрашивает метаданные через api.polyhaven.com/files/{asset_id} и скачивает ассет.
-        Типы:
-          - 'hdris': возвращает путь к .hdr / .exr
-          - 'models': возвращает путь к .glb
         """
         resolution = resolution.lower()
         asset_type = asset_type.lower()
@@ -71,7 +64,6 @@ class AssetManager:
         os.makedirs(local_dir, exist_ok=True)
         local_path = os.path.join(local_dir, f"{asset_id}_{resolution}.{ext}")
 
-        # Проверка локального кэша
         if os.path.isfile(local_path) and os.path.getsize(local_path) > 1024:
             print(f"[ASSETS] Poly Haven взят из кэша: {os.path.basename(local_path)}")
             return local_path
@@ -85,15 +77,19 @@ class AssetManager:
         download_url = None
         if asset_type == "hdris":
             hdri_entry = data.get("hdri", {}).get(resolution, {})
-            # Приоритет формата: запрошенный -> hdr -> exr
             fmt_dict = hdri_entry.get(ext) or hdri_entry.get("hdr") or hdri_entry.get("exr")
             if fmt_dict and "url" in fmt_dict:
                 download_url = fmt_dict["url"]
         elif asset_type == "models":
-            gltf_entry = data.get("gltf", {}).get(resolution, {})
-            fmt_dict = gltf_entry.get("glb") or gltf_entry.get("gltf")
-            if fmt_dict and "url" in fmt_dict:
-                download_url = fmt_dict["url"]
+            # Различные варианты вложенности в API Poly Haven
+            gltf_section = data.get("gltf", {})
+            if resolution in gltf_section:
+                res_data = gltf_section[resolution]
+                fmt_dict = res_data.get("glb") or res_data.get("gltf") or (res_data if "url" in res_data else None)
+                if fmt_dict and "url" in fmt_dict:
+                    download_url = fmt_dict["url"]
+            if not download_url and "glb" in gltf_section:
+                download_url = gltf_section["glb"].get("url")
 
         if not download_url:
             raise ValueError(
@@ -104,14 +100,9 @@ class AssetManager:
         self._download_file(download_url, local_path)
         return local_path
 
-    # =========================================================================
-    # AMBIENT CG API (ambientcg.com)
-    # =========================================================================
-
     def ambientcg(self, asset_id: str, resolution: str = "2K", filetype: str = "JPG") -> dict:
         """
         Скачивает CC0 PBR набор текстур ambientCG, распаковывает и индексирует карты.
-        Возвращает словарь путей: 'color', 'roughness', 'normal', 'displacement', 'ao', 'metallic'.
         """
         resolution = resolution.upper()
         filetype = filetype.upper()
@@ -119,7 +110,6 @@ class AssetManager:
         local_dir = os.path.join(self.cache_dir, "ambientcg", pack_name)
         zip_path = os.path.join(self.cache_dir, "ambientcg", f"{pack_name}.zip")
 
-        # Если папка существует и содержит файлы, сразу возвращаем карту путей
         if os.path.isdir(local_dir) and len(os.listdir(local_dir)) > 0:
             pbr_dict = self._index_pbr_folder(local_dir)
             if pbr_dict:
@@ -129,7 +119,6 @@ class AssetManager:
         download_url = f"https://ambientcg.com/get?file={pack_name}.zip"
         self._download_file(download_url, zip_path)
 
-        # Распаковка zip-архива
         os.makedirs(local_dir, exist_ok=True)
         try:
             with zipfile.ZipFile(zip_path, "r") as z:
@@ -146,7 +135,6 @@ class AssetManager:
         return self._index_pbr_folder(local_dir)
 
     def _index_pbr_folder(self, folder: str) -> dict:
-        """Сканирует распакованную папку и классифицирует текстуры по типам."""
         maps = {}
         for fname in os.listdir(folder):
             path = os.path.join(folder, fname)
@@ -167,15 +155,7 @@ class AssetManager:
                 maps["emission"] = path
         return maps
 
-    # =========================================================================
-    # МАНИФЕСТЫ И СЦЕНИЧЕСКИЕ ХЕЛПЕРЫ
-    # =========================================================================
-
     def fetch_from_manifest(self, manifest_source) -> dict:
-        """
-        Предзагружает все ассеты, описанные в manifest.json.
-        Принимает путь к файлу manifest.json или dict.
-        """
         if isinstance(manifest_source, str):
             if not os.path.isfile(manifest_source):
                 raise FileNotFoundError(f"Манифест ассетов не найден: {manifest_source}")
@@ -186,7 +166,6 @@ class AssetManager:
 
         resolved = {"polyhaven": {}, "ambientcg": {}}
 
-        # 1. Poly Haven секция
         for item in manifest_data.get("polyhaven", []):
             asset_id = item["id"]
             asset_type = item.get("type", "hdris")
@@ -195,7 +174,6 @@ class AssetManager:
             path = self.polyhaven(asset_id, asset_type=asset_type, resolution=res, preferred_format=fmt)
             resolved["polyhaven"][asset_id] = path
 
-        # 2. ambientCG секция
         for item in manifest_data.get("ambientcg", []):
             asset_id = item["id"]
             res = item.get("resolution", "2K")
@@ -203,11 +181,9 @@ class AssetManager:
             pbr_maps = self.ambientcg(asset_id, resolution=res, filetype=ftype)
             resolved["ambientcg"][asset_id] = pbr_maps
 
-        print("[ASSETS] Все ассеты из манифеста успешно валидированы и загружены в кэш.")
         return resolved
 
     def apply_hdri_to_world(self, hdri_path: str, strength: float = 1.0, rotation_z: float = 0.0):
-        """Нодовая настройка окружения World для HDRI с вращением по оси Z."""
         world = bpy.context.scene.world or bpy.data.worlds.new("World")
         bpy.context.scene.world = world
         world.use_nodes = True
@@ -239,13 +215,4 @@ def get_asset_manager() -> AssetManager:
     global _mgr
     if _mgr is None:
         _mgr = AssetManager()
-    return _mgr
-
-
-if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        manifest_file = sys.argv[1]
-        print(f"[ASSETS] Запуск автономной загрузки манифеста: {manifest_file}")
-        get_asset_manager().fetch_from_manifest(manifest_file)
-    else:
-        print("Использование: python -m engine.assets <путь_к_manifest.json>") 
+    return _mgr 
