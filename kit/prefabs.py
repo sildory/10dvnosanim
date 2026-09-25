@@ -7,7 +7,7 @@ import math
 import random
 import bpy
 from engine.assets import get_asset_manager
-from engine.materials import make_neon, make_water, make_pbr
+from engine.materials import make_neon, make_water
 
 
 def make_cables(
@@ -17,11 +17,6 @@ def make_cables(
     resolution: int = 4,
     material: bpy.types.Material = None
 ) -> bpy.types.Object:
-    """
-    Создает настоящие трехмерные провода / ванты моста через кривые с Bevel.
-    Устраняет мерцание субпиксельных линий на рендере.
-    points_pairs: список пар точек [((x1,y1,z1), (x2,y2,z2)), ...]
-    """
     if points_pairs is None:
         points_pairs = [
             ((-10.0, 5.0, 12.0), (0.0, 0.0, 3.0)),
@@ -43,7 +38,6 @@ def make_cables(
     curve_obj = bpy.data.objects.new(name, curve_data)
     bpy.context.collection.objects.link(curve_obj)
 
-    # Материал кабеля (темная прорезиненная сталь, диэлектрическая оболочка)
     if material is None:
         mat = bpy.data.materials.new(name=f"{name}_Mat")
         mat.use_nodes = True
@@ -68,7 +62,6 @@ def make_ocean(
     total_frames: int = 60,
     wave_speed: float = 0.04
 ) -> bpy.types.Object:
-    """Генерирует спектральный океан с волнами через нативный модификатор Ocean."""
     bpy.ops.mesh.primitive_plane_add(size=1.0, location=location)
     ocean = bpy.context.active_object
     ocean.name = name
@@ -79,16 +72,15 @@ def make_ocean(
     mod.repeat_y = repeat[1]
     mod.spatial_size = spatial_size
     mod.resolution = resolution
+    mod.render_resolution = resolution
     mod.choppiness = choppiness
     mod.depth = depth
 
-    # Анимация движения спектральных волн
     mod.time = 1.0
     mod.keyframe_insert(data_path="time", frame=1)
     mod.time = 1.0 + total_frames * wave_speed
     mod.keyframe_insert(data_path="time", frame=total_frames)
 
-    # Физически корректный глубокий шейдер воды
     water_mat = make_water(f"{name}_Shader")
     ocean.data.materials.append(water_mat)
     return ocean
@@ -96,22 +88,24 @@ def make_ocean(
 
 def make_rain(
     name: str = "Rain_System",
-    drops_count: int = 500,
+    drops_count: int = 400,
     bounds=(25.0, 25.0, 14.0),
     center=(0.0, 0.0, 8.0),
     fall_speed: float = 24.0,
     slant=(1.5, -0.5),
     total_frames: int = 60
 ) -> bpy.types.Object:
-    """
-    Генерирует штормовой дождь. На скорости Cycles размывает
-    капли в фотореалистичные косые дождевые струи через нативный Motion Blur.
-    """
     random.seed(42)
     parent = bpy.data.objects.new(name, None)
     bpy.context.collection.objects.link(parent)
 
     rain_mat = make_water("Rain_Drop_Glass", roughness=0.01)
+
+    bpy.ops.mesh.primitive_cylinder_add(radius=0.005, depth=0.35, location=(0, 0, -100))
+    base_drop = bpy.context.active_object
+    base_mesh = base_drop.data
+    base_mesh.materials.append(rain_mat)
+    bpy.context.collection.objects.unlink(base_drop)
 
     half_x = bounds[0] / 2.0
     half_y = bounds[1] / 2.0
@@ -122,23 +116,25 @@ def make_rain(
         ry = center[1] + random.uniform(-half_y, half_y)
         rz = center[2] + random.uniform(-half_z, half_z)
 
-        # Капля вытянута по Z в цилиндр
-        bpy.ops.mesh.primitive_cylinder_add(
-            radius=0.005,
-            depth=0.35,
-            location=(rx, ry, rz)
-        )
-        drop = bpy.context.active_object
-        drop.name = f"Drop_{i:04d}"
-        drop.data.materials.append(rain_mat)
+        drop = bpy.data.objects.new(f"Rain_Drop_{i:04d}", base_mesh)
+        bpy.context.collection.objects.link(drop)
         drop.parent = parent
 
-        # Анимация падения с ветровым скосом
+        cycle_len = random.randint(15, 25)
+        st = 1 - random.randint(0, cycle_len)
+        en = st + cycle_len
+
         drop.location = (rx, ry, rz)
-        drop.keyframe_insert(data_path="location", frame=1)
+        drop.keyframe_insert(data_path="location", frame=st)
 
         drop.location = (rx + slant[0], ry + slant[1], rz - fall_speed)
-        drop.keyframe_insert(data_path="location", frame=total_frames)
+        drop.keyframe_insert(data_path="location", frame=en)
+
+        if drop.animation_data and drop.animation_data.action:
+            for fcurve in drop.animation_data.action.fcurves:
+                c_mod = fcurve.modifiers.new(type="CYCLES")
+                c_mod.mode_before = "REPEAT"
+                c_mod.mode_after = "REPEAT"
 
     return parent
 
@@ -151,7 +147,6 @@ def make_neon_sign(
     color=(0.1, 0.85, 1.0),
     strength: float = 40.0
 ) -> bpy.types.Object:
-    """Создает геометрическую световую панель газоразрядного неона."""
     bpy.ops.mesh.primitive_cube_add(size=1.0, location=location)
     neon = bpy.context.active_object
     neon.name = name
@@ -172,7 +167,6 @@ def make_searchlight(
     spot_size_deg: float = 32.0,
     spot_blend: float = 0.25
 ) -> tuple:
-    """Создает узконаправленный прожектор с автонаведением на целевую точку."""
     bpy.ops.object.light_add(type="SPOT", location=location)
     spot = bpy.context.active_object
     spot.name = name
@@ -201,7 +195,6 @@ def make_softbox(
     energy: float = 1200.0,
     color=(0.95, 0.98, 1.0)
 ) -> bpy.types.Object:
-    """Создает рассеянный прямоугольный софтбокс (Area Light) для нуарного света."""
     bpy.ops.object.light_add(type="AREA", location=location)
     area = bpy.context.active_object
     area.name = name
@@ -221,7 +214,6 @@ def make_city_block(
     spacing: float = 8.0,
     seed: int = 42
 ) -> bpy.types.Object:
-    """Генерирует процедурный массив зданий для городского фона."""
     random.seed(seed)
     root = bpy.data.objects.new(name, None)
     root.location = location
@@ -253,7 +245,6 @@ def make_city_block(
         bevel = b_obj.modifiers.new("Bevel", "BEVEL")
         bevel.width = 0.2
         bevel.segments = 2
-
         b_obj.data.materials.append(concrete_mat)
 
     return root
@@ -266,15 +257,21 @@ def import_model(
     scale=(1, 1, 1),
     name: str = None
 ) -> bpy.types.Object:
-    """Скачивает по API и импортирует GLTF/GLB модель из Poly Haven."""
     assets = get_asset_manager()
     path = assets.polyhaven(asset_id, asset_type="models", resolution="1k")
-    bpy.ops.import_scene.gltf(filepath=path)
-    imported = bpy.context.selected_objects[0]
+    existing_objs = set(bpy.data.objects)
 
-    if name:
-        imported.name = name
-    imported.location = location
-    imported.rotation_euler = rotation
-    imported.scale = scale
-    return imported
+    bpy.ops.import_scene.gltf(filepath=path)
+    new_objs = [obj for obj in bpy.data.objects if obj not in existing_objs]
+
+    root = bpy.data.objects.new(name or f"Model_{asset_id}", None)
+    bpy.context.collection.objects.link(root)
+
+    for obj in new_objs:
+        if obj.parent is None:
+            obj.parent = root
+
+    root.location = location
+    root.rotation_euler = rotation
+    root.scale = scale
+    return root
