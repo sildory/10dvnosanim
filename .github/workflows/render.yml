@@ -2,6 +2,11 @@ name: Production 4K Cycles Render
 
 on:
   workflow_dispatch:
+    inputs:
+      episode:
+        description: 'Имя эпизода для 4K рендера'
+        required: true
+        default: 'ep01_bay'
 
 permissions:
   contents: write
@@ -10,7 +15,7 @@ jobs:
   render-shards:
     name: Shard ${{ matrix.shard }} (Frames ${{ matrix.start }}-${{ matrix.end }})
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
 
     strategy:
       fail-fast: false
@@ -18,16 +23,22 @@ jobs:
         include:
           - shard: 1
             start: 1
-            end: 15
-          - shard: 2
-            start: 16
-            end: 30
-          - shard: 3
-            start: 31
-            end: 45
-          - shard: 4
-            start: 46
             end: 60
+          - shard: 2
+            start: 61
+            end: 120
+          - shard: 3
+            start: 121
+            end: 180
+          - shard: 4
+            start: 181
+            end: 240
+          - shard: 5
+            start: 241
+            end: 300
+          - shard: 6
+            start: 301
+            end: 360
 
     steps:
       - name: 1. Клонирование репозитория
@@ -48,14 +59,14 @@ jobs:
         uses: actions/cache@v4
         with:
           path: assets_cache
-          key: assets-${{ hashFiles('projects/**/manifest.json') }}
+          key: assets-${{ hashFiles('episodes/**', 'projects/**') }}
           restore-keys: |
             assets-
 
       - name: 5. Рендер диапазона кадров шардом в 4K Cycles
         run: |
           python main.py \
-            --project test_studio \
+            --episode ${{ github.event.inputs.episode || 'ep01_bay' }} \
             --start ${{ matrix.start }} \
             --end ${{ matrix.end }} \
             --profile 4k \
@@ -119,4 +130,4 @@ jobs:
           TAG="v1.0.0-master-$(date +'%Y%m%d-%H%M%S')"
           gh release create "$TAG" output/10dvnosanim_4k_master.mp4 \
             --title "10DVNOSANIM 4K Cycles Master ($TAG)" \
-            --notes "Автоматическая мастер-сборка 4K из ш ардов Cycles CPU."
+            --notes "Автоматическая мастер-сборка 4K из шардов Cycles CPU." 
