@@ -7,7 +7,7 @@ from engine.settings import apply_cycles_settings
 
 
 def clear_scene():
-    """Безопасно и полностью очищает сцену, не разрушая контекст коллекций Blender."""
+    """Безопасно и полностью очищает сцену, текстуры и действия Blender."""
     if bpy.context.active_object and bpy.context.active_object.mode != "OBJECT":
         bpy.ops.object.mode_set(mode="OBJECT")
 
@@ -15,7 +15,7 @@ def clear_scene():
     for obj in list(bpy.data.objects):
         bpy.data.objects.remove(obj, do_unlink=True)
 
-    # Очистка блоков данных
+    # Очистка всех блоков данных для предотвращения утечек памяти
     for mesh in list(bpy.data.meshes):
         bpy.data.meshes.remove(mesh, do_unlink=True)
     for cam in list(bpy.data.cameras):
@@ -26,6 +26,10 @@ def clear_scene():
         bpy.data.materials.remove(mat, do_unlink=True)
     for curve in list(bpy.data.curves):
         bpy.data.curves.remove(curve, do_unlink=True)
+    for img in list(bpy.data.images):
+        bpy.data.images.remove(img, do_unlink=True)
+    for act in list(bpy.data.actions):
+        bpy.data.actions.remove(act, do_unlink=True)
 
     # Очистка маркеров таймлайна
     if bpy.context.scene:
@@ -95,4 +99,4 @@ def execute_render(
         print(f"[CYCLES] Кадр {current_frame:04d}/{end_frame:04d} [{cam_name}] отрендерен за {frame_time:.2f} сек. -> {os.path.basename(target_path)}")
 
     total_time = time.time() - t_start
-    print(f"[ENGINE] Успешно! Диапазон отрендерен за {tota l_time:.1f} сек.\n")
+    print(f"[ENGINE] Успешно! Диапазон отрендерен за {total_time:.1f} сек.\n")
