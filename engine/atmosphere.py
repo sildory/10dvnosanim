@@ -1,25 +1,26 @@
-"""Модуль объемного тумана (Volumetric Atmosphere) для честных лучей света в Cycles."""
+"""
+Модуль физической объемной атмосферы (Volumetric Scatter) в Cycles.
+Создает реальные световые лучи (God-Rays) от прожекторов, фар и неона.
+"""
 
 import bpy
 
 
 def setup_volume_fog(
     bounds=(60.0, 60.0, 25.0),
-    location=(0, 0, 10.0),
-    density: float = 0.012,
-    anisotropy: float = 0.6,
+    location=(0.0, 0.0, 10.0),
+    density: float = 0.015,
+    anisotropy: float = 0.65,
     color=(0.85, 0.92, 1.0)
 ) -> bpy.types.Object:
-    """Создает физический куб объемного тумана.
-
-    anisotropy = 0.6 обеспечивает сильное прямое рассеивание (лучи от фар и неона).
+    """
+    Создает волюметрический контейнер с прямым рассеиванием света.
+    anisotropy = 0.65 концентрирует свет в направленный кинематографический луч.
     """
     bpy.ops.mesh.primitive_cube_add(size=1.0, location=location)
     box = bpy.context.active_object
     box.name = "Volume_Atmosphere_Container"
     box.scale = bounds
-
-    # Отображаем как сетку в окне предпросмотра, чтобы не загораживать сцену
     box.display_type = "WIRE"
 
     mat = bpy.data.materials.new(name="Volumetric_Fog_Shader")
@@ -38,5 +39,5 @@ def setup_volume_fog(
     links.new(vol.outputs["Volume"], node_out.inputs["Volume"])
     box.data.materials.append(mat)
 
-    print(f"[ATMOSPHERE] Объемный туман активирован: density={density}, anisotropy={anisotropy}")
+    print(f"[ATMOSPHERE] Объемный туман активирован: плотность={density}, анизотропия={anisotropy}")
     return box
