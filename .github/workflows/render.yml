@@ -68,8 +68,9 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
-      - name: 3. Установка зависимостей
+      - name: 3. Установка системных библиотек и зависимостей bpy
         run: |
+          sudo apt-get update && sudo apt-get install -y libxxf86vm1 libgl1 libxfixes3 libxi6 libxkbcommon0
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
@@ -84,11 +85,11 @@ jobs:
       - name: 5. Параллельный 4K рендер диапазона кадров
         run: |
           python main.py \
-            --episode ${{ github.event.inputs.episode || 'ep01_bay' }} \
-            --start ${{ matrix.start }} \
-            --end ${{ matrix.end }} \
+            --episode "${{ github.event.inputs.episode || 'ep01_bay' }}" \
+            --start "${{ matrix.start }}" \
+            --end "${{ matrix.end }}" \
             --profile 4k \
-            --samples 48 \
+            --samples 40 \
             --output output/frames
 
       - name: 6. Загрузка кадров шарда в артефакты
@@ -129,7 +130,7 @@ jobs:
 
       - name: 5. Сборка финального 4K MP4 (H.264 Master, BT.709)
         run: |
-          ffmpeg -y -framerate 60 -i output/all_frames/frame_%04d.png \
+          ffmpeg -y -framerate 60 -pattern_type glob -i 'output/all_frames/frame_*.png' \
             -c:v libx264 \
             -preset fast \
             -crf 16 \
@@ -153,4 +154,4 @@ jobs:
           TAG="v1.0.0-master-$(date +'%Y%m%d-%H%M%S')"
           gh release create "$TAG" output/10dvnosanim_4k_master.mp4 \
             --title "10DVNOSANIM 4K Cycles Master ($TAG)" \
-            --notes "Автоматическая высокоскоростная мастер-сборка 4K из 12 параллельных шардов Cycles." 
+            --notes "Автоматическая высокоскоростная мастер-сборка 4K из 12 параллельных шардов Cycles."
