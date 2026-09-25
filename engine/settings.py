@@ -13,7 +13,7 @@ PROFILES = {
         "motion_blur": False,
         "fps": 30,
     },
-    # Высокое качество для Full HD
+    # Высокое качество Full HD
     "fullhd": {
         "resolution_x": 1920,
         "resolution_y": 1080,
@@ -21,9 +21,9 @@ PROFILES = {
         "adaptive_threshold": 0.03,
         "use_denoising": True,
         "motion_blur": True,
-        "fps": 60,
+        "fps": 30,
     },
-    # Оптимизированный кинематографичный мастер-профиль 4K для CPU раннеров
+    # Кинематографичный мастер-профиль 4K для CPU-раннеров
     "4k": {
         "resolution_x": 3840,
         "resolution_y": 2160,
@@ -31,14 +31,14 @@ PROFILES = {
         "adaptive_threshold": 0.025,
         "use_denoising": True,
         "motion_blur": True,
-        "fps": 60,
+        "fps": 30,
     },
 }
 
 
-def apply_cycles_settings(scene: bpy.types.Scene, profile_name: str = "4k", samples_override: int = None):
+def apply_cycles_settings(scene: bpy.types.Scene, profile_name: str = "preview", samples_override: int = None):
     """Применяет высокопроизводительные настройки Cycles для CPU-раннеров."""
-    profile = PROFILES.get(profile_name, PROFILES["4k"])
+    profile = PROFILES.get(profile_name, PROFILES["preview"])
     samples = samples_override if samples_override is not None else profile["samples"]
 
     # 1. Переключение на Cycles CPU
@@ -46,7 +46,7 @@ def apply_cycles_settings(scene: bpy.types.Scene, profile_name: str = "4k", samp
     scene.cycles.device = "CPU"
     scene.render.threads_mode = "AUTO"
 
-    # 2. Разрешение и кадровая частота
+    # 2. Разрешение и кадровая частота (строго синхронно с анимацией и FFmpeg)
     scene.render.resolution_x = profile["resolution_x"]
     scene.render.resolution_y = profile["resolution_y"]
     scene.render.resolution_percentage = 100
@@ -65,20 +65,16 @@ def apply_cycles_settings(scene: bpy.types.Scene, profile_name: str = "4k", samp
         scene.cycles.denoising_prefilter = "FAST"
         scene.cycles.denoising_quality = "BALANCED"
 
-    # 5. Оптимизация световых путей (Главный прирост скорости CPU)
-    scene.cycles.use_light_tree = True
+    # 5. Оптимизация световых путей
+    # Для сцен с 2-3 источниками света прямое сэмплирование быстрее Light Tree
+    scene.cycles.use_light_tree = False
     scene.cycles.seed = 42
     scene.cycles.max_bounces = 4
     scene.cycles.diffuse_bounces = 2
     scene.cycles.glossy_bounces = 2
     scene.cycles.transmission_bounces = 3
-    scene.cycles.volume_bounces = 0  # Исключает многократное рассеяние, сохраняя четкие God-Rays
+    scene.cycles.volume_bounces = 0
     scene.cycles.transparent_max_bounces = 4
-
-    # Шаг трассировки тумана (баланс скорости и детализации лучей)
-    scene.cycles.volume_step_rate = 2.5
-    scene.cycles.volume_preview_step_rate = 4.0
-    scene.cycles.volume_max_steps = 128
 
     scene.cycles.sample_clamp_direct = 0.0
     scene.cycles.sample_clamp_indirect = 8.0
@@ -97,7 +93,7 @@ def apply_cycles_settings(scene: bpy.types.Scene, profile_name: str = "4k", samp
     except (TypeError, ValueError):
         scene.view_settings.view_transform = "Filmic"
 
-    # 8. Формат вывода (строго без дублирования расширения файла)
+    # 8. Формат вывода
     scene.render.image_settings.file_format = "PNG"
     scene.render.image_settings.color_mode = "RGB"
     scene.render.image_settings.color_depth = "8"
