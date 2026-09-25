@@ -1,5 +1,6 @@
 """Модуль глобальных настроек рендера и конфигурации движка Cycles (High-Performance CPU)."""
 
+import os
 import bpy
 
 PROFILES = {
@@ -41,18 +42,21 @@ def apply_cycles_settings(scene: bpy.types.Scene, profile_name: str = "preview",
     profile = PROFILES.get(profile_name, PROFILES["preview"])
     samples = samples_override if samples_override is not None else profile["samples"]
 
-    # 1. Переключение на Cycles CPU
+    # 1. Переключение на Cycles CPU и принудительное задействование всех доступных ядер
     scene.render.engine = "CYCLES"
     scene.cycles.device = "CPU"
-    scene.render.threads_mode = "AUTO"
 
-    # 2. Разрешение и кадровая частота (строго синхронно с анимацией и FFmpeg)
+    cpu_count = os.cpu_count() or 2
+    scene.render.threads_mode = "FIXED"
+    scene.render.threads = cpu_count
+
+    # 2. Разрешение и кадровая частота
     scene.render.resolution_x = profile["resolution_x"]
     scene.render.resolution_y = profile["resolution_y"]
     scene.render.resolution_percentage = 100
     scene.render.fps = profile["fps"]
 
-    # 3. Адаптивный сэмплинг
+    # 3. Адаптивный сэмплинг (сохраняет 100% кинематографическое качество)
     scene.cycles.use_adaptive_sampling = True
     scene.cycles.adaptive_threshold = profile["adaptive_threshold"]
     scene.cycles.adaptive_min_samples = 8
@@ -66,7 +70,6 @@ def apply_cycles_settings(scene: bpy.types.Scene, profile_name: str = "preview",
         scene.cycles.denoising_quality = "BALANCED"
 
     # 5. Оптимизация световых путей
-    # Для сцен с 2-3 источниками света прямое сэмплирование быстрее Light Tree
     scene.cycles.use_light_tree = False
     scene.cycles.seed = 42
     scene.cycles.max_bounces = 4
