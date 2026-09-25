@@ -39,17 +39,12 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
-      - name: 3. Установка системных библиотек
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgl1 libxxf86vm1 libxfixes3 libxi6 libxkbcommon0
-
-      - name: 4. Установка зависимостей
+      - name: 3. Установка зависимостей
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: 5. Кэширование ассетов (Poly Haven & ambientCG)
+      - name: 4. Кэширование ассетов
         uses: actions/cache@v4
         with:
           path: assets_cache
@@ -57,7 +52,7 @@ jobs:
           restore-keys: |
             assets-
 
-      - name: 6. Рендер диапазона кадров шардом в 4K Cycles
+      - name: 5. Рендер диапазона кадров шардом в 4K Cycles
         run: |
           python main.py \
             --project test_studio \
@@ -67,7 +62,7 @@ jobs:
             --samples 64 \
             --output output/frames
 
-      - name: 7. Загрузка кадров шарда в артефакты
+      - name: 6. Загрузка кадров шарда в артефакты
         uses: actions/upload-artifact@v4
         with:
           name: frames-shard-${{ matrix.shard }}
@@ -84,25 +79,21 @@ jobs:
       - name: 1. Клонирование репозитория
         uses: actions/checkout@v4
 
-      - name: 2. Установка FFmpeg
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
-
-      - name: 3. Создание директории кадров
+      - name: 2. Создание папки для кадров
         run: mkdir -p output/all_frames
 
-      - name: 4. Скачивание всех шардов
-        uses: actions/actions-download-artifact@v5
+      - name: 3. Скачивание и объединение всех шардов
+        uses: actions/download-artifact@v4
         with:
-          path: output/downloaded_artifacts
+          pattern: frames-shard-*
+          path: output/all_frames
+          merge-multiple: true
 
-      - name: 5. Объединение кадров в одну папку
+      - name: 4. Проверка собранных кадров
         run: |
-          find output/downloaded_artifacts -name "*.png" -exec cp {} output/all_frames/ \;
           echo "Всего кадров собрано: $(ls -1 output/all_frames/*.png | wc -l)"
 
-      - name: 6. Сборка финального 4K MP4 (H.264 Master, BT.709)
+      - name: 5. Сборка финального 4K MP4 (H.264 Master, BT.709)
         run: |
           ffmpeg -y -framerate 60 -i output/all_frames/frame_%04d.png \
             -c:v libx264 \
@@ -112,13 +103,20 @@ jobs:
             -color_primaries bt709 \
             -color_trc bt709 \
             -colorspace bt709 \
-            3dvnosanim_4k_master.mp4
+            output/10dvnosanim_4k_master.mp4
+
+      - name: 6. Сохранение мастера в артефакты
+        uses: actions/upload-artifact@v4
+        with:
+          name: 10dvnosanim-4k-master
+          path: output/10dvnosanim_4k_master.mp4
+          retention-days: 14
 
       - name: 7. Публикация готового 4K-видео в GitHub Releases
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="v1.1.0-assets-$(date +'%Y%m%d-%H%M%S')"
-          gh release create "$TAG" 3dvnosanim_4k_master.mp4 \
-            --title "3DVNOSANIM 4K with PBR & HDRI ($TAG)" \
-            --notes "Рендер с автоматической выкачкой текстур ambientCG и HDRI Poly Haven через API."
+          TAG="v1.0.0-master-$(date +'%Y%m%d-%H%M%S')"
+          gh release create "$TAG" output/10dvnosanim_4k_master.mp4 \
+            --title "10DVNOSANIM 4K Cycles Master ($TAG)" \
+            --notes "Автоматическая мастер-сборка 4K из ш ардов Cycles CPU."
