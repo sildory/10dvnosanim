@@ -1,6 +1,6 @@
 """
 Модуль физически корректных шейдеров (PBR, жидкости, стекло, неон).
-Строгое соблюдение закона диэлектриков: metallic = 0.0 для всех неметаллов.
+Полная совместимость со структурой Principled BSDF в Blender 4.0+.
 """
 
 import bpy
@@ -52,12 +52,16 @@ def make_pbr(
             mix_node.data_type = "RGBA"
             mix_node.blend_type = "MULTIPLY"
 
-            factor_socket = mix_node.inputs.get("Factor") or mix_node.inputs[0]
-            factor_socket.default_value = 0.8
+            factor_sock = mix_node.inputs.get("Factor") or mix_node.inputs[0]
+            factor_sock.default_value = 0.85
 
-            sock_a = mix_node.inputs.get("A") or mix_node.inputs[6]
-            sock_b = mix_node.inputs.get("B") or mix_node.inputs[7]
-            sock_out = mix_node.outputs.get("Result") or mix_node.outputs[2]
+            # Безопасный поиск сокетов цвета для совместимости с Blender 4.x
+            rgba_inputs = [s for s in mix_node.inputs if s.type == "RGBA"]
+            rgba_outputs = [s for s in mix_node.outputs if s.type == "RGBA"]
+
+            sock_a = rgba_inputs[0] if len(rgba_inputs) > 0 else mix_node.inputs.get("A")
+            sock_b = rgba_inputs[1] if len(rgba_inputs) > 1 else mix_node.inputs.get("B")
+            sock_out = rgba_outputs[0] if len(rgba_outputs) > 0 else mix_node.outputs.get("Result")
 
             links.new(tex_col.outputs["Color"], sock_a)
             links.new(tex_ao.outputs["Color"], sock_b)
@@ -75,8 +79,9 @@ def make_pbr(
     else:
         bsdf.inputs["Roughness"].default_value = 0.45
 
-    # 3. Bump & Normal
+    # 3. Bump & Normal Map цепочка
     bump_target = bsdf.inputs["Normal"]
+
     if "displacement" in pbr_maps:
         tex_disp = nodes.new(type="ShaderNodeTexImage")
         tex_disp.image = bpy.data.images.load(pbr_maps["displacement"], check_existing=True)
@@ -111,11 +116,13 @@ def make_pbr(
     else:
         bsdf.inputs["Metallic"].default_value = 1.0 if is_metallic else 0.0
 
-    # 5. Coat (Мокрая зеркальная пленка воды)
-    if "Coat Weight" in bsdf.inputs and not is_metallic:
-        bsdf.inputs["Coat Weight"].default_value = wetness
-        if "Coat Roughness" in bsdf.inputs:
-            bsdf.inputs["Coat Roughness"].default_value = 0.02
+    # 5. Coat (эффект мокрой отражающей поверхности)
+    coat_sock = bsdf.inputs.get("Coat Weight") or bsdf.inputs.get("Coat")
+    if coat_sock and not is_metallic:
+        coat_sock.default_value = wetness
+        coat_rough = bsdf.inputs.get("Coat Roughness")
+        if coat_rough:
+            coat_rough.default_value = 0.02
 
     links.new(bsdf.outputs["BSDF"], node_out.inputs["Surface"])
     return mat
@@ -136,8 +143,9 @@ def make_water(material_name: str = "Water_PBR", color=(0.015, 0.03, 0.05, 1.0),
     bsdf.inputs["IOR"].default_value = ior
     bsdf.inputs["Metallic"].default_value = 0.0
 
-    if "Transmission Weight" in bsdf.inputs:
-        bsdf.inputs["Transmission Weight"].default_value = 0.98
+    trans_sock = bsdf.inputs.get("Transmission Weight") or bsdf.inputs.get("Transmission")
+    if trans_sock:
+        trans_sock.default_value = 0.98
 
     links.new(bsdf.outputs["BSDF"], node_out.inputs["Surface"])
     return mat
