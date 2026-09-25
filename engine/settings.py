@@ -7,7 +7,7 @@ PROFILES = {
     "preview": {
         "resolution_x": 960,
         "resolution_y": 540,
-        "samples": 12,
+        "samples": 16,
         "adaptive_threshold": 0.08,
         "use_denoising": True,
         "motion_blur": False,
@@ -17,17 +17,17 @@ PROFILES = {
     "fullhd": {
         "resolution_x": 1920,
         "resolution_y": 1080,
-        "samples": 36,
+        "samples": 32,
         "adaptive_threshold": 0.03,
         "use_denoising": True,
         "motion_blur": True,
         "fps": 60,
     },
-    # Оптимизированный кинематографичный мастер-профиль 4K для CPU
+    # Оптимизированный кинематографичный мастер-профиль 4K для CPU раннеров
     "4k": {
         "resolution_x": 3840,
         "resolution_y": 2160,
-        "samples": 48,
+        "samples": 40,
         "adaptive_threshold": 0.025,
         "use_denoising": True,
         "motion_blur": True,
@@ -52,7 +52,7 @@ def apply_cycles_settings(scene: bpy.types.Scene, profile_name: str = "4k", samp
     scene.render.resolution_percentage = 100
     scene.render.fps = profile["fps"]
 
-    # 3. Адаптивный сэмплинг (рендерит только там, где реально есть шум)
+    # 3. Адаптивный сэмплинг
     scene.cycles.use_adaptive_sampling = True
     scene.cycles.adaptive_threshold = profile["adaptive_threshold"]
     scene.cycles.adaptive_min_samples = 8
@@ -65,22 +65,20 @@ def apply_cycles_settings(scene: bpy.types.Scene, profile_name: str = "4k", samp
         scene.cycles.denoising_prefilter = "FAST"
         scene.cycles.denoising_quality = "BALANCED"
 
-    # 5. Оптимизация световых путей (ГЛАВНЫЙ БУСТ СКОРОСТИ CPU)
-    # volume_bounces = 0 оставляет прямые лучи от прожектора (God-Rays),
-    # но убирает вторичный рекурсивный просчет частиц в тумане, ускоряя кадр в 4 раза!
+    # 5. Оптимизация световых путей (Главный прирост скорости CPU)
     scene.cycles.use_light_tree = True
     scene.cycles.seed = 42
     scene.cycles.max_bounces = 4
     scene.cycles.diffuse_bounces = 2
     scene.cycles.glossy_bounces = 2
     scene.cycles.transmission_bounces = 3
-    scene.cycles.volume_bounces = 0
+    scene.cycles.volume_bounces = 0  # Исключает многократное рассеяние, сохраняя четкие God-Rays
     scene.cycles.transparent_max_bounces = 4
 
-    # Оптимизация шага трассировки тумана для CPU
-    scene.cycles.volume_step_rate = 2.0
+    # Шаг трассировки тумана (баланс скорости и детализации лучей)
+    scene.cycles.volume_step_rate = 2.5
     scene.cycles.volume_preview_step_rate = 4.0
-    scene.cycles.volume_max_steps = 256
+    scene.cycles.volume_max_steps = 128
 
     scene.cycles.sample_clamp_direct = 0.0
     scene.cycles.sample_clamp_indirect = 8.0
@@ -91,17 +89,17 @@ def apply_cycles_settings(scene: bpy.types.Scene, profile_name: str = "4k", samp
         scene.render.motion_blur_shutter = 0.5
         scene.render.motion_blur_position = "CENTER"
 
-    # 7. Кинематографический тонокорректор AgX / Filmic
+    # 7. Цветопередача AgX / Filmic
     scene.display_settings.display_device = "sRGB"
     try:
         scene.view_settings.view_transform = "AgX"
         scene.view_settings.look = "None"
-    except TypeError:
+    except (TypeError, ValueError):
         scene.view_settings.view_transform = "Filmic"
 
-    # 8. Формат вывода
+    # 8. Формат вывода (строго без дублирования расширения файла)
     scene.render.image_settings.file_format = "PNG"
     scene.render.image_settings.color_mode = "RGB"
     scene.render.image_settings.color_depth = "8"
     scene.render.image_settings.compression = 15
-    scene.render.use_file_ext ension = False
+    scene.render.use_file_extension = False
