@@ -24,7 +24,7 @@ class Director:
         self.assets.apply_hdri_to_world(path, strength=strength, rotation_z=rotation)
 
     def set_ocean(self, location=(0, 0, 0), repeat=(4, 4), choppiness: float = 1.8, depth: float = 20.0):
-        """Генерирует спектральный океан через модификатор Ocean."""
+        """Генерирует спектральный океан с равномерным волновым циклом."""
         bpy.ops.mesh.primitive_plane_add(size=1.0, location=location)
         ocean = bpy.context.active_object
         ocean.name = "Ocean_Water"
@@ -44,42 +44,50 @@ class Director:
         mod.time = 1.0 + self.total_frames * 0.04
         mod.keyframe_insert(data_path="time", frame=self.total_frames)
 
+        # Равномерное движение волн без замедлений в начале/конце
+        if ocean.animation_data and ocean.animation_data.action:
+            for fcurve in ocean.animation_data.action.fcurves:
+                for kf in fcurve.keyframe_points:
+                    kf.interpolation = "LINEAR"
+
         mat = make_water("PBR_Ocean_Water", color=(0.015, 0.025, 0.04, 1.0), roughness=0.04)
         ocean.data.materials.append(mat)
         return ocean
 
-    def set_fog(self, density: float = 0.012, anisotropy: float = 0.6):
+    def set_fog(self, density: float = 0.012, anisotropy: float = 0.65):
         """Включает физический объемный туман для кинематографических лучей."""
         return setup_volume_fog(density=density, anisotropy=anisotropy)
 
     def set_rain(self, drops_count: int = 400, fall_speed: float = 26.0):
         """
-        Создает высокоскоростной зацикленный штормовой дождь.
-        Капли не исчезают, а непрерывно повторяют цикл падения с физическим Motion Blur.
+        Создает быстрый зацикленный дождь.
+        Капли падают с постоянной физической скоростью без всплесков размытия на стыке циклов.
         """
         random.seed(42)
         rain_mat = make_water("Rain_Drop_Mat", color=(0.9, 0.95, 1.0, 1.0), roughness=0.01)
 
         parent = bpy.data.objects.new("Rain_System", None)
-        bpy.context.collection.objects.link(parent)
+        bpy.context.scene.collection.objects.link(parent)
 
-        # Создаем базовый меш капли один раз
         bpy.ops.mesh.primitive_cylinder_add(radius=0.005, depth=0.4, location=(0, 0, -100))
         base_drop = bpy.context.active_object
         base_mesh = base_drop.data
         base_mesh.materials.append(rain_mat)
-        bpy.context.collection.objects.unlink(base_drop)
+        bpy.context.scene.collection.objects.unlink(base_drop)
 
-        # Инстанцируем капли без вызова тяжелых UI-операторов
         for i in range(drops_count):
-            rx = random.uniform(-16, 16)
-            ry = random.uniform(-16, 16)
+            rx = random.uniform(-18, 18)
+            ry = random.uniform(-18, 18)
             rz_top = random.uniform(8, 16)
             rz_bottom = rz_top - fall_speed
 
             drop = bpy.data.objects.new(f"Rain_Drop_{i:04d}", base_mesh)
-            bpy.context.collection.objects.link(drop)
+            bpy.context.scene.collection.objects.link(drop)
             drop.parent = parent
+
+            # Отключаем размытие самого объекта капли (форма вытянутого цилиндра уже дает нужный шлейф)
+            if hasattr(drop, "cycles"):
+                drop.cycles.use_motion_blur = False
 
             cycle_length = random.randint(15, 25)
             start_frame = 1 - random.randint(0, cycle_length)
@@ -93,6 +101,8 @@ class Director:
 
             if drop.animation_data and drop.animation_data.action:
                 for fcurve in drop.animation_data.action.fcurves:
+                    for kf in fcurve.keyframe_points:
+                        kf.interpolation = "LINEAR"  # Строго постоянная скорость падения
                     c_mod = fcurve.modifiers.new(type="CYCLES")
                     c_mod.mode_before = "REPEAT"
                     c_mod.mode_after = "REPEAT"
@@ -111,7 +121,7 @@ class Director:
             raise RuntimeError(f"[DIRECTOR] Не удалось импортировать модель Poly Haven '{asset_id}'")
 
         root = bpy.data.objects.new(f"PH_{asset_id}_Root", None)
-        bpy.context.collection.objects.link(root)
+        bpy.context.scene.collection.objects.link(root)
 
         for obj in new_objs:
             if obj.parent is None:
@@ -123,16 +133,21 @@ class Director:
         return root
 
     def spawn_ground(self, size=(40, 40, 1), location=(0, 0, 0), ambientcg_id="Asphalt012", wetness=1.0):
-        """Создает мощеный причал/улицу с PBR-картами ambientCG."""
+        """Создает мощеный причал с правильным масштабом текстур без растяжений."""
         bpy.ops.mesh.primitive_cube_add(size=1.0, location=location)
         slab = bpy.context.active_object
         slab.scale = size
-        mat = make_pbr(f"PBR_{ambientcg_id}", ambientcg_id=ambientcg_id, scale=6.0, wetness=wetness)
+
+        # Применяем масштаб и кубическую развертку для четкой геометрии текстур
+        bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+        bpy.ops.uv.cube_project(cube_size=2.0)
+
+        mat = make_pbr(f"PBR_{ambientcg_id}", ambientcg_id=ambientcg_id, scale=4.0, wetness=wetness)
         slab.data.materials.append(mat)
         return slab
 
     def spawn_neon(self, name: str, location=(0, 0, 2), color=(0.1, 0.8, 1.0), strength=40.0, size=(0.2, 1.5, 0.3)):
-        """Создает излучающую неоновую вывеску/сигнальный огонь."""
+        """Создает излучающий неоновый маяк / сигнальный огонь."""
         bpy.ops.mesh.primitive_cube_add(size=1.0, location=location)
         neon = bpy.context.active_object
         neon.name = name
@@ -141,18 +156,38 @@ class Director:
         neon.data.materials.append(mat)
         return neon
 
-    def add_searchlight(self, location=(10, -10, 8), target=(0, 0, 0), energy=8000.0, color=(0.8, 0.95, 1.0)):
-        """Создает мощный прожектор с трекингом точки наведения."""
+    def add_searchlight(
+        self,
+        location=(10, -10, 8),
+        target=(0, 0, 0),
+        sweep_target=None,
+        energy=8000.0,
+        color=(0.8, 0.95, 1.0)
+    ):
+        """
+        Создает мощный прожектор с поддержкой сканирования поверхности воды лучом.
+        """
         bpy.ops.object.light_add(type="SPOT", location=location)
         spot = bpy.context.active_object
         spot.data.energy = energy
-        spot.data.spot_size = math.radians(30)
+        spot.data.spot_size = math.radians(32)
         spot.data.spot_blend = 0.25
         spot.data.color = color
 
         target_obj = bpy.data.objects.new("Light_Target", None)
         target_obj.location = target
-        bpy.context.collection.objects.link(target_obj)
+        bpy.context.scene.collection.objects.link(target_obj)
+
+        if sweep_target is not None:
+            target_obj.keyframe_insert(data_path="location", frame=1)
+            target_obj.location = sweep_target
+            target_obj.keyframe_insert(data_path="location", frame=self.total_frames)
+
+            if target_obj.animation_data and target_obj.animation_data.action:
+                for fcurve in target_obj.animation_data.action.fcurves:
+                    for kf in fcurve.keyframe_points:
+                        kf.interpolation = "BEZIER"
+                        kf.easing = "EASE_IN_OUT"
 
         track = spot.constraints.new("TRACK_TO")
         track.target = target_obj
@@ -182,7 +217,7 @@ class Director:
 
         target_empty = bpy.data.objects.new(f"Target_{name}", None)
         target_empty.location = look_at
-        bpy.context.collection.objects.link(target_empty)
+        bpy.context.scene.collection.objects.link(target_empty)
 
         cam.dof.use_dof = True
         cam.dof.focus_object = target_empty
@@ -204,15 +239,13 @@ class Director:
                     kf.interpolation = "BEZIER"
                     kf.easing = "EASE_IN_OUT"
 
-        # Регистрируем маркер
         marker = self.scene.timeline_markers.new(name=f"Marker_{name}", frame=start_frame)
         marker.camera = cam_obj
 
-        # Если в сцене еще нет активной камеры, выставляем текущую
         if self.scene.camera is None or start_frame == 1:
             self.scene.camera = cam_obj
 
     def finalize(self):
-        """Завершает постановку и конфигурирует композер."""
+        """Завершает постановку и конфигурирует композитор."""
         setup_cinematic_compositor(self.scene)
         print(f"[DIRECTOR] Эпизод '{self.name}' успешно собран ({self.total_frames} кадров).") 
