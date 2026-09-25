@@ -1,0 +1,33 @@
+name: Pack Code Snapshot
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 1. Клонирование репозитория
+        uses: actions/checkout@v4
+
+      - name: 2. Настройка Node.js для запуска Repomix
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: 3. Упаковка кодовой базы через Repomix
+        run: |
+          npx --yes repomix --output repomix-output.txt \
+            --ignore "output/**,assets_cache/**,*.mp4,*.png,*.jpg,*.hdr,*.exr,*.blend,*.blend1,node_modules/**"
+
+      - name: 4. Публикация чистого текстового файла в Releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="code-$(date +'%Y%m%d-%H%M%S')"
+          gh release create "$TAG" repomix-output.txt \
+            --title "Code Snapshot ($TAG)" \
+            --notes "Полный исходный код проекта 3dvnosanim в одном текстовом файле repomix-output.txt"
