@@ -1,0 +1,188 @@
+name: Render Movie (All Episodes)
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: 'Профиль качества рендера'
+        required: true
+        type: choice
+        default: 'preview'
+        options:
+          - 'preview'
+          - 'fullhd'
+          - '4k'
+      output_name:
+        description: 'Имя итогового видеофайла (без .mp4)'
+        required: false
+        default: 'master_movie'
+
+permissions:
+  contents: write
+
+jobs:
+  # ЭТАП 1: Автоматический поиск всех эпизодов в папке episodes/
+  discover-episodes:
+    name: "Discover Episodes"
+    runs-on: ubuntu-latest
+    outputs:
+      episodes: ${{ steps.list-episodes.outputs.episodes }}
+      count: ${{ steps.list-episodes.outputs.count }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Scan episodes directory
+        id: list-episodes
+        run: |
+          python -c "
+          import os, json, sys
+          ep_dir = 'episodes'
+          if not os.path.isdir(ep_dir):
+              print(f'Error: folder {ep_dir} not found', file=sys.stderr)
+              sys.exit(1)
+          files = sorted([
+              f[:-3] for f in os.listdir(ep_dir)
+              if f.startswith('ep') and f.endswith('.py') and not f.startswith('__')
+          ])
+          if not files:
+              print('Error: no episodes found in episodes/', file=sys.stderr)
+              sys.exit(1)
+          print(f'Discovered {len(files)} episodes: {files}')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              out.write(f'episodes={json.dumps(files)}\n')
+              out.write(f'count={len(files)}\n')
+          "
+
+  # ЭТАП 2: Параллельный рендер каждого найденного эпизода на отдельном раннере
+  render-episodes:
+    name: "Render: ${{ matrix.episode }}"
+    needs: discover-episodes
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        episode: ${{ fromJson(needs.discover-episodes.outputs.episodes) }}
+
+    steps:
+      - name: 1. Клонирование репозитория
+        uses: actions/checkout@v4
+
+      - name: 2. Настройка Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: 3. Установка системных библиотек и зависимостей bpy
+        run: |
+          sudo apt-get update && sudo apt-get install -y libxxf86vm1 libgl1 libxfixes3 libxi6 libxkbcommon0 ffmpeg
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 4. Кэширование ассетов
+        uses: actions/cache@v4
+        with:
+          path: assets_cache
+          key: assets-${{ hashFiles('episodes/**') }}
+          restore-keys: |
+            assets-
+
+      - name: 5. Рендер эпизода
+        run: |
+          python main.py \
+            --episode "${{ matrix.episode }}" \
+            --profile "${{ github.event.inputs.profile || 'preview' }}" \
+            --output "output/frames/${{ matrix.episode }}"
+
+      - name: 6. Сборка видео эпизода (H.264, 30 FPS, BT.709)
+        run: |
+          mkdir -p output/episodes_video
+          ffmpeg -y -framerate 30 -pattern_type glob -i "output/frames/${{ matrix.episode }}/frame_*.png" \
+            -c:v libx264 \
+            -preset fast \
+            -crf 17 \
+            -pix_fmt yuv420p \
+            -color_primaries bt709 \
+            -color_trc bt709 \
+            -colorspace bt709 \
+            "output/episodes_video/${{ matrix.episode }}.mp4"
+
+      - name: 7. Загрузка видео-артефакта эпизода
+        uses: actions/upload-artifact@v4
+        with:
+          name: "video-${{ matrix.episode }}"
+          path: "output/episodes_video/${{ matrix.episode }}.mp4"
+          retention-days: 2
+
+  # ЭТАП 3: Автоматическая склейка всех эпизодов по порядку и публикация в Releases
+  assemble-movie:
+    name: "Assemble Movie & Publish Release"
+    needs: [discover-episodes, render-episodes]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: 1. Клонирование репозитория
+        uses: actions/checkout@v4
+
+      - name: 2. Установка FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: 3. Создание рабочих папок
+        run: |
+          mkdir -p output/downloaded
+          mkdir -p output/movie
+
+      - name: 4. Скачивание всех отрендеренных видео
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "video-*"
+          path: output/downloaded
+          merge-multiple: true
+
+      - name: 5. Автоматическая генерация списка склейки в алфавитном порядке
+        run: |
+          python -c "
+          import os, sys
+          dl_dir = 'output/downloaded'
+          mp4s = sorted([f for f in os.listdir(dl_dir) if f.endswith('.mp4')])
+          print(f'Found {len(mp4s)} videos to assemble: {mp4s}')
+          if not mp4s:
+              print('Error: no MP4 files found for assembly!', file=sys.stderr)
+              sys.exit(1)
+          with open('concat_list.txt', 'w', encoding='utf-8') as f:
+              for name in mp4s:
+                  full_path = os.path.abspath(os.path.join(dl_dir, name))
+                  f.write(f\"file '{full_path}'\n\")
+          print('Generated concat_list.txt:')
+          with open('concat_list.txt') as f:
+              print(f.read())
+          "
+
+      - name: 6. Бесшовная склейка в единый мастер-фильм без пережатия (-c copy)
+        run: |
+          OUT_NAME="${{ github.event.inputs.output_name || 'master_movie' }}"
+          ffmpeg -y -f concat -safe 0 -i concat_list.txt \
+            -c copy \
+            "output/movie/${OUT_NAME}.mp4"
+
+      - name: 7. Загрузка финального фильма в артефакты
+        uses: actions/upload-artifact@v4
+        with:
+          name: "${{ github.event.inputs.output_name || 'master_movie' }}-${{ github.event.inputs.profile }}"
+          path: "output/movie/*.mp4"
+          retention-days: 14
+
+      - name: 8. Публикация в GitHub Releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          OUT_NAME="${{ github.event.inputs.output_name || 'master_movie' }}"
+          PROFILE="${{ github.event.inputs.profile }}"
+          COUNT="${{ needs.discover-episodes.outputs.count }}"
+          TAG="movie-$(date +'%Y%m%d-%H%M%S')"
+          gh release create "$TAG" "output/movie/${OUT_NAME}.mp4" \
+            --title "${OUT_NAME} (${PROFILE}, ${COUNT} ep) - ${TAG}" \
+            --notes "Автоматическая мастер-сборка фильма из ${COUNT} эпизодов (${PROFILE}), отрендеренных параллельно в GitHub Actions."
