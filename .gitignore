@@ -1,0 +1,17 @@
+# Временные кадры и видео
+output/
+*.mp4
+*.png
+*.jpg
+*.exr
+
+# Кэш Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Виртуальные окружения
+venv/
+env/
+.venv/
