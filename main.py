@@ -9,6 +9,7 @@ import sys
 import os
 import argparse
 import importlib
+import traceback
 import random
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -45,7 +46,7 @@ def parse_arguments():
         "--project",
         type=str,
         default=None,
-        help="Альтернативный путь/проект (например: test_studio или my_scene)"
+        help="Альтернативный путь/проект"
     )
     parser.add_argument("--start", type=int, default=1, help="Начальный кадр диапазона")
     parser.add_argument("--end", type=int, default=60, help="Конечный кадр диапазона")
@@ -64,7 +65,7 @@ def parse_arguments():
 
 
 def load_target_module(target_name: str):
-    """Ищет модуль в папках episodes и projects."""
+    """Ищет модуль в папках episodes и projects без маскировки внутренних ошибок."""
     candidates = [
         f"episodes.{target_name}",
         f"projects.{target_name}.scene",
@@ -72,14 +73,27 @@ def load_target_module(target_name: str):
         target_name
     ]
 
+    last_error = None
     for candidate in candidates:
         try:
             mod = importlib.import_module(candidate)
             return mod, candidate
-        except ModuleNotFoundError:
+        except ModuleNotFoundError as err:
+            # Если ошибка произошла внутри загружаемого файла — выводим полный стек
+            if err.name != candidate and not str(err).endswith(candidate):
+                print(f"\n[FATAL] Ошибка внутри модуля '{candidate}':")
+                traceback.print_exc()
+                sys.exit(1)
+            last_error = err
             continue
+        except Exception:
+            print(f"\n[FATAL] Ошибка синтаксиса или логики в '{candidate}':")
+            traceback.print_exc()
+            sys.exit(1)
 
     print(f"\n[FATAL] Не удалось загрузить сценарий '{target_name}'. Перебраны пути: {candidates}")
+    if last_error:
+        print(f"Причина: {last_error}")
     sys.exit(1)
 
 
@@ -109,13 +123,10 @@ def main():
     # 1. Безопасная очистка сцены
     clear_scene()
 
-    # 2. Гарантируем наличие рабочей коллекции
-    if bpy.context.scene.collection not in bpy.context.view_layer.layer_collection.collection.children.values():
-        if len(bpy.data.collections) == 0:
-            main_col = bpy.data.collections.new("Scene_Collection")
-            bpy.context.scene.collection.children.link(main_col)
+    # 2. Гарантируем корректность активной коллекции
+    bpy.context.view_layer.active_layer_collection = bpy.context.view_layer.layer_collection
 
-    # 3. Синхронизация манифеста (если существует)
+    # 3. Синхронизация манифеста ассетов
     sync_manifest_if_exists(target_name)
 
     # 4. Загрузка сценария
@@ -144,4 +155,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main() 
+    main()
