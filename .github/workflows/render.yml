@@ -15,7 +15,7 @@ jobs:
   render-shards:
     name: Shard ${{ matrix.shard }} (Frames ${{ matrix.start }}-${{ matrix.end }})
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 60
 
     strategy:
       fail-fast: false
@@ -23,21 +23,39 @@ jobs:
         include:
           - shard: 1
             start: 1
-            end: 60
+            end: 30
           - shard: 2
-            start: 61
-            end: 120
+            start: 31
+            end: 60
           - shard: 3
-            start: 121
-            end: 180
+            start: 61
+            end: 90
           - shard: 4
-            start: 181
-            end: 240
+            start: 91
+            end: 120
           - shard: 5
-            start: 241
-            end: 300
+            start: 121
+            end: 150
           - shard: 6
+            start: 151
+            end: 180
+          - shard: 7
+            start: 181
+            end: 210
+          - shard: 8
+            start: 211
+            end: 240
+          - shard: 9
+            start: 241
+            end: 270
+          - shard: 10
+            start: 271
+            end: 300
+          - shard: 11
             start: 301
+            end: 330
+          - shard: 12
+            start: 331
             end: 360
 
     steps:
@@ -63,14 +81,14 @@ jobs:
           restore-keys: |
             assets-
 
-      - name: 5. Рендер диапазона кадров шардом в 4K Cycles
+      - name: 5. Параллельный 4K рендер диапазона кадров
         run: |
           python main.py \
             --episode ${{ github.event.inputs.episode || 'ep01_bay' }} \
             --start ${{ matrix.start }} \
             --end ${{ matrix.end }} \
             --profile 4k \
-            --samples 64 \
+            --samples 48 \
             --output output/frames
 
       - name: 6. Загрузка кадров шарда в артефакты
@@ -102,14 +120,19 @@ jobs:
 
       - name: 4. Проверка собранных кадров
         run: |
-          echo "Всего кадров собрано: $(ls -1 output/all_frames/*.png | wc -l)"
+          TOTAL=$(ls -1 output/all_frames/*.png 2>/dev/null | wc -l)
+          echo "Всего кадров собрано: $TOTAL"
+          if [ "$TOTAL" -eq 0 ]; then
+            echo "Ошибка: кадры не найдены!"
+            exit 1
+          fi
 
       - name: 5. Сборка финального 4K MP4 (H.264 Master, BT.709)
         run: |
           ffmpeg -y -framerate 60 -i output/all_frames/frame_%04d.png \
             -c:v libx264 \
-            -preset slow \
-            -crf 14 \
+            -preset fast \
+            -crf 16 \
             -pix_fmt yuv420p \
             -color_primaries bt709 \
             -color_trc bt709 \
@@ -130,4 +153,4 @@ jobs:
           TAG="v1.0.0-master-$(date +'%Y%m%d-%H%M%S')"
           gh release create "$TAG" output/10dvnosanim_4k_master.mp4 \
             --title "10DVNOSANIM 4K Cycles Master ($TAG)" \
-            --notes "Автоматическая мастер-сборка 4K из шардов Cycles CPU." 
+            --notes "Автоматическая высокоскоростная мастер-сборка 4K из 12 параллельных шардов Cycles." 
