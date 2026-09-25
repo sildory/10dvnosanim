@@ -1,81 +1,152 @@
-"""Модуль автоматической загрузки ассетов: HDRI, 3D-модели (GLTF) и PBR-текстуры."""
+"""
+Модуль автоматической загрузки ассетов: Poly Haven (HDRI, GLB, PBR) и ambientCG (PBR).
+Работает через официальные открытые REST API без ключей и регистрации.
+Обеспечивает локальное кэширование в директории assets_cache/.
+"""
 
 import os
+import sys
+import json
 import zipfile
 import requests
 import bpy
 
 CACHE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "assets_cache"))
+HTTP_TIMEOUT = 90
+USER_AGENT = "10dvnosanim-Pipeline/1.0 (Blender CC0 Automation)"
 
 
 class AssetManager:
     def __init__(self, cache_dir: str = CACHE_DIR):
         self.cache_dir = cache_dir
         os.makedirs(self.cache_dir, exist_ok=True)
+        self.session = requests.Session()
+        self.session.headers.update({"User-Agent": USER_AGENT})
 
     def _download_file(self, url: str, target_path: str):
+        """Скачивает файл потоком с валидацией размера."""
         os.makedirs(os.path.dirname(target_path), exist_ok=True)
-        print(f"[ASSETS] Скачивание: {url} -> {os.path.basename(target_path)}")
-        res = requests.get(url, stream=True, timeout=90)
-        res.raise_for_status()
-        with open(target_path, "wb") as f:
-            for chunk in res.iter_content(chunk_size=1024 * 1024):
-                if chunk:
-                    f.write(chunk)
-        print(f"[ASSETS] Сохранено: {os.path.basename(target_path)}")
+        print(f"[ASSETS] Скачивание по сети: {url} -> {os.path.basename(target_path)}")
+        response = self.session.get(url, stream=True, timeout=HTTP_TIMEOUT)
+        response.raise_for_status()
 
-    def polyhaven(self, asset_id: str, asset_type: str = "hdris", resolution: str = "2k") -> str:
-        """Скачивает HDRI или 3D-модель (GLB) с Poly Haven API."""
+        temp_path = target_path + ".download"
+        try:
+            with open(temp_path, "wb") as f:
+                for chunk in response.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        f.write(chunk)
+            if os.path.exists(target_path):
+                os.remove(target_path)
+            os.rename(temp_path, target_path)
+            print(f"[ASSETS] Успешно сохранено: {os.path.basename(target_path)}")
+        except Exception:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            raise
+
+    # =========================================================================
+    # POLY HAVEN API (api.polyhaven.com)
+    # =========================================================================
+
+    def polyhaven(
+        self,
+        asset_id: str,
+        asset_type: str = "hdris",
+        resolution: str = "2k",
+        preferred_format: str = None
+    ) -> str:
+        """
+        Запрашивает метаданные через api.polyhaven.com/files/{asset_id} и скачивает ассет.
+        Типы:
+          - 'hdris': возвращает путь к .hdr / .exr
+          - 'models': возвращает путь к .glb
+        """
+        resolution = resolution.lower()
+        asset_type = asset_type.lower()
+        ext_map = {"hdris": preferred_format or "hdr", "models": preferred_format or "glb"}
+        ext = ext_map.get(asset_type, "hdr")
+
         local_dir = os.path.join(self.cache_dir, "polyhaven", asset_type, asset_id)
         os.makedirs(local_dir, exist_ok=True)
-
-        ext = "hdr" if asset_type == "hdris" else "glb"
         local_path = os.path.join(local_dir, f"{asset_id}_{resolution}.{ext}")
 
-        if os.path.exists(local_path) and os.path.getsize(local_path) > 0:
+        # Проверка локального кэша
+        if os.path.isfile(local_path) and os.path.getsize(local_path) > 1024:
+            print(f"[ASSETS] Poly Haven взят из кэша: {os.path.basename(local_path)}")
             return local_path
 
-        meta_url = f"https://api.polyhaven.com/files/{asset_id}"
-        data = requests.get(meta_url, timeout=30).json()
+        api_url = f"https://api.polyhaven.com/files/{asset_id}"
+        print(f"[ASSETS] Запрос метаданных Poly Haven API: {api_url}")
+        res = self.session.get(api_url, timeout=30)
+        res.raise_for_status()
+        data = res.json()
 
         download_url = None
         if asset_type == "hdris":
-            hdri_info = data.get("hdri", {}).get(resolution, {})
-            entry = hdri_info.get("hdr") or hdri_info.get("exr")
-            download_url = entry["url"] if entry else None
+            hdri_entry = data.get("hdri", {}).get(resolution, {})
+            # Приоритет формата: запрошенный -> hdr -> exr
+            fmt_dict = hdri_entry.get(ext) or hdri_entry.get("hdr") or hdri_entry.get("exr")
+            if fmt_dict and "url" in fmt_dict:
+                download_url = fmt_dict["url"]
         elif asset_type == "models":
-            gltf_info = data.get("gltf", {}).get(resolution, {})
-            entry = gltf_info.get("glb") or gltf_info.get("gltf")
-            download_url = entry["url"] if entry else None
+            gltf_entry = data.get("gltf", {}).get(resolution, {})
+            fmt_dict = gltf_entry.get("glb") or gltf_entry.get("gltf")
+            if fmt_dict and "url" in fmt_dict:
+                download_url = fmt_dict["url"]
 
         if not download_url:
-            raise ValueError(f"URL не найден для Poly Haven: {asset_id} ({asset_type})")
+            raise ValueError(
+                f"Не удалось определить прямую ссылку для Poly Haven '{asset_id}' "
+                f"(type={asset_type}, res={resolution})"
+            )
 
         self._download_file(download_url, local_path)
         return local_path
 
-    def ambientcg(self, asset_id: str, resolution: str = "2K") -> dict:
-        """Скачивает CC0 PBR набор карт с ambientCG."""
-        pack_name = f"{asset_id}_{resolution}-JPG"
+    # =========================================================================
+    # AMBIENT CG API (ambientcg.com)
+    # =========================================================================
+
+    def ambientcg(self, asset_id: str, resolution: str = "2K", filetype: str = "JPG") -> dict:
+        """
+        Скачивает CC0 PBR набор текстур ambientCG, распаковывает и индексирует карты.
+        Возвращает словарь путей: 'color', 'roughness', 'normal', 'displacement', 'ao', 'metallic'.
+        """
+        resolution = resolution.upper()
+        filetype = filetype.upper()
+        pack_name = f"{asset_id}_{resolution}-{filetype}"
         local_dir = os.path.join(self.cache_dir, "ambientcg", pack_name)
         zip_path = os.path.join(self.cache_dir, "ambientcg", f"{pack_name}.zip")
 
-        if os.path.exists(local_dir) and len(os.listdir(local_dir)) > 0:
-            return self._index_pbr_folder(local_dir)
+        # Если папка существует и содержит файлы, сразу возвращаем карту путей
+        if os.path.isdir(local_dir) and len(os.listdir(local_dir)) > 0:
+            pbr_dict = self._index_pbr_folder(local_dir)
+            if pbr_dict:
+                print(f"[ASSETS] ambientCG взят из кэша: {pack_name}")
+                return pbr_dict
 
-        url = f"https://ambientcg.com/get?file={pack_name}.zip"
-        self._download_file(url, zip_path)
+        download_url = f"https://ambientcg.com/get?file={pack_name}.zip"
+        self._download_file(download_url, zip_path)
 
+        # Распаковка zip-архива
         os.makedirs(local_dir, exist_ok=True)
-        with zipfile.ZipFile(zip_path, "r") as z:
-            z.extractall(local_dir)
-
-        if os.path.exists(zip_path):
-            os.remove(zip_path)
+        try:
+            with zipfile.ZipFile(zip_path, "r") as z:
+                z.extractall(local_dir)
+            print(f"[ASSETS] Архив {pack_name}.zip успешно распакован.")
+        except zipfile.BadZipFile:
+            if os.path.exists(zip_path):
+                os.remove(zip_path)
+            raise RuntimeError(f"[FATAL] Ошибка распаковки архива ambientCG: {pack_name}.zip поврежден.")
+        finally:
+            if os.path.isfile(zip_path):
+                os.remove(zip_path)
 
         return self._index_pbr_folder(local_dir)
 
     def _index_pbr_folder(self, folder: str) -> dict:
+        """Сканирует распакованную папку и классифицирует текстуры по типам."""
         maps = {}
         for fname in os.listdir(folder):
             path = os.path.join(folder, fname)
@@ -86,13 +157,57 @@ class AssetManager:
                 maps["roughness"] = path
             elif "normalgl" in f or ("normal" in f and "dx" not in f):
                 maps["normal"] = path
-            elif "displacement" in f:
+            elif "displacement" in f or "height" in f:
                 maps["displacement"] = path
-            elif "ao" in f or "ambientocclusion" in f:
+            elif "ambientocclusion" in f or "_ao" in f or f.endswith("_ao.jpg") or f.endswith("_ao.png"):
                 maps["ao"] = path
+            elif "metalness" in f or "metallic" in f:
+                maps["metallic"] = path
+            elif "emission" in f:
+                maps["emission"] = path
         return maps
 
+    # =========================================================================
+    # МАНИФЕСТЫ И СЦЕНИЧЕСКИЕ ХЕЛПЕРЫ
+    # =========================================================================
+
+    def fetch_from_manifest(self, manifest_source) -> dict:
+        """
+        Предзагружает все ассеты, описанные в manifest.json.
+        Принимает путь к файлу manifest.json или dict.
+        """
+        if isinstance(manifest_source, str):
+            if not os.path.isfile(manifest_source):
+                raise FileNotFoundError(f"Манифест ассетов не найден: {manifest_source}")
+            with open(manifest_source, "r", encoding="utf-8") as f:
+                manifest_data = json.load(f)
+        else:
+            manifest_data = manifest_source
+
+        resolved = {"polyhaven": {}, "ambientcg": {}}
+
+        # 1. Poly Haven секция
+        for item in manifest_data.get("polyhaven", []):
+            asset_id = item["id"]
+            asset_type = item.get("type", "hdris")
+            res = item.get("resolution", "2k")
+            fmt = item.get("format")
+            path = self.polyhaven(asset_id, asset_type=asset_type, resolution=res, preferred_format=fmt)
+            resolved["polyhaven"][asset_id] = path
+
+        # 2. ambientCG секция
+        for item in manifest_data.get("ambientcg", []):
+            asset_id = item["id"]
+            res = item.get("resolution", "2K")
+            ftype = item.get("filetype", "JPG")
+            pbr_maps = self.ambientcg(asset_id, resolution=res, filetype=ftype)
+            resolved["ambientcg"][asset_id] = pbr_maps
+
+        print("[ASSETS] Все ассеты из манифеста успешно валидированы и загружены в кэш.")
+        return resolved
+
     def apply_hdri_to_world(self, hdri_path: str, strength: float = 1.0, rotation_z: float = 0.0):
+        """Нодовая настройка окружения World для HDRI с вращением по оси Z."""
         world = bpy.context.scene.world or bpy.data.worlds.new("World")
         bpy.context.scene.world = world
         world.use_nodes = True
@@ -100,26 +215,37 @@ class AssetManager:
         links = world.node_tree.links
         nodes.clear()
 
-        out = nodes.new("ShaderNodeOutputWorld")
-        bg = nodes.new("ShaderNodeBackground")
-        bg.inputs["Strength"].default_value = strength
-        env = nodes.new("ShaderNodeTexEnvironment")
-        env.image = bpy.data.images.load(hdri_path, check_existing=True)
+        node_out = nodes.new("ShaderNodeOutputWorld")
+        node_bg = nodes.new("ShaderNodeBackground")
+        node_bg.inputs["Strength"].default_value = strength
 
-        coord = nodes.new("ShaderNodeTexCoord")
-        mapping = nodes.new("ShaderNodeMapping")
-        mapping.inputs["Rotation"].default_value[2] = rotation_z
+        node_env = nodes.new("ShaderNodeTexEnvironment")
+        node_env.image = bpy.data.images.load(hdri_path, check_existing=True)
 
-        links.new(coord.outputs["Generated"], mapping.inputs["Vector"])
-        links.new(mapping.outputs["Vector"], env.inputs["Vector"])
-        links.new(env.outputs["Color"], bg.inputs["Color"])
-        links.new(bg.outputs["Background"], out.inputs["Surface"])
+        node_coord = nodes.new("ShaderNodeTexCoord")
+        node_mapping = nodes.new("ShaderNodeMapping")
+        node_mapping.inputs["Rotation"].default_value[2] = rotation_z
+
+        links.new(node_coord.outputs["Generated"], node_mapping.inputs["Vector"])
+        links.new(node_mapping.outputs["Vector"], node_env.inputs["Vector"])
+        links.new(node_env.outputs["Color"], node_bg.inputs["Color"])
+        links.new(node_bg.outputs["Background"], node_out.inputs["Surface"])
 
 
 _mgr = None
+
 
 def get_asset_manager() -> AssetManager:
     global _mgr
     if _mgr is None:
         _mgr = AssetManager()
     return _mgr
+
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        manifest_file = sys.argv[1]
+        print(f"[ASSETS] Запуск автономной загрузки манифеста: {manifest_file}")
+        get_asset_manager().fetch_from_manifest(manifest_file)
+    else:
+        print("Использование: python -m engine.assets <путь_к_manifest.json>") 
