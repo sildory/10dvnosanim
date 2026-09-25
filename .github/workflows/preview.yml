@@ -31,8 +31,9 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
-      - name: 3. Установка bpy и Python-зависимостей
+      - name: 3. Установка системных библиотек и зависимостей bpy
         run: |
+          sudo apt-get update && sudo apt-get install -y libxxf86vm1 libgl1 libxfixes3 libxi6 libxkbcommon0 ffmpeg
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
@@ -47,19 +48,19 @@ jobs:
       - name: 5. Быстрый рендер превью-кадров (540p, Cycles Turbo)
         run: |
           python main.py \
-            --episode ${{ github.event.inputs.episode || 'ep01_bay' }} \
-            --start ${{ github.event.inputs.start_frame || 1 }} \
-            --end ${{ github.event.inputs.end_frame || 60 }} \
+            --episode "${{ github.event.inputs.episode || 'ep01_bay' }}" \
+            --start "${{ github.event.inputs.start_frame || 1 }}" \
+            --end "${{ github.event.inputs.end_frame || 60 }}" \
             --step 1 \
             --profile preview \
             --output output/frames
 
-      - name: 6. Сборка видео через FFmpeg
+      - name: 6. Сборка видео через FFmpeg (Glob-паттерн для любых диапазонов)
         run: |
           mkdir -p output/video
-          ffmpeg -y -framerate 30 -i output/frames/frame_%04d.png \
-            -c:v libx264 -pix_fmt yuv420p -preset ultrafast -crf 22 \
-            output/video/preview_${{ github.event.inputs.episode || 'ep01_bay' }}.mp4
+          ffmpeg -y -framerate 30 -pattern_type glob -i 'output/frames/frame_*.png' \
+            -c:v libx264 -pix_fmt yuv420p -preset fast -crf 20 \
+            "output/video/preview_${{ github.event.inputs.episode || 'ep01_bay' }}.mp4"
 
       - name: 7. Загрузка готового MP4 в артефакты
         uses: actions/upload-artifact@v4
