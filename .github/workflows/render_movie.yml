@@ -1,4 +1,4 @@
-name: Render Movie (All Episodes - 20 Max Shards)
+name: Render Movie (All Episodes - Dynamic Shards)
 
 on:
   workflow_dispatch:
@@ -22,10 +22,10 @@ permissions:
 
 jobs:
   # =========================================================================
-  # ЭТАП 1: Поиск эпизодов и генерация 20 шардов под максимальный лимит GitHub
+  # ЭТАП 1: Расчёт лёгких параллельных шардов (по ~18 кадров, защита от таймаута)
   # =========================================================================
   plan-shards:
-    name: "Plan Parallel Shards (Max 20)"
+    name: "Plan Parallel Shards"
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
@@ -35,7 +35,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Calculate 20 Shards Matrix
+      - name: Calculate Shards Matrix
         id: build-matrix
         run: |
           python -c "
@@ -55,11 +55,10 @@ jobs:
               print('Error: no episodes found in episodes/', file=sys.stderr)
               sys.exit(1)
 
-          num_episodes = len(episodes)
-          # Максимальный лимит для бесплатного аккаунта GitHub Actions - 20 параллельных задач
-          MAX_CONCURRENT_JOBS = 20
-          shards_per_ep = max(1, MAX_CONCURRENT_JOBS // num_episodes)
           total_frames = 180
+          # Шард по 18 кадров гарантированно укладывается в 12-18 минут на CPU раннере
+          TARGET_FRAMES_PER_SHARD = 18
+          shards_per_ep = max(4, math.ceil(total_frames / TARGET_FRAMES_PER_SHARD))
 
           matrix_include = []
           for ep in episodes:
@@ -75,10 +74,7 @@ jobs:
                           'end': end
                       })
 
-          print(f'Configured {len(matrix_include)} parallel shards for {num_episodes} episodes.')
-          for item in matrix_include:
-              print(f\"  -> {item['episode']} [shard {item['shard']}]: frames {item['start']}..{item['end']}\")
-
+          print(f'Configured {len(matrix_include)} shards ({shards_per_ep} per ep) for {len(episodes)} episodes.')
           with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
               out.write(f'matrix={json.dumps(matrix_include)}\n')
               out.write(f'episodes={json.dumps(episodes)}\n')
@@ -86,13 +82,13 @@ jobs:
           "
 
   # =========================================================================
-  # ЭТАП 2: Параллельный рендер 20 шардов на независимых раннерах
+  # ЭТАП 2: Параллельный рендер шардов (таймаут поднят до 120 минут)
   # =========================================================================
   render-shards:
     name: "${{ matrix.episode }} [${{ matrix.start }}..${{ matrix.end }}]"
     needs: plan-shards
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -141,13 +137,13 @@ jobs:
           retention-days: 1
 
   # =========================================================================
-  # ЭТАП 3: Сборка всех кадров, генерация видео эпизодов и склейка фильма
+  # ЭТАП 3: Сборка всех кадров, видео эпизодов и мастер-фильма
   # =========================================================================
   assemble-movie:
     name: "Assemble Movie & Publish"
     needs: [plan-shards, render-shards]
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
 
     steps:
       - name: 1. Клонирование репозитория
@@ -185,12 +181,11 @@ jobs:
               for fname in files:
                   if fname.startswith('frame_') and fname.endswith('.png'):
                       dir_name = os.path.basename(root)
-                      # Формат имени артефакта: frames-<episode_name>-shard-<N>
-                      parts = dir_name.split('-')
-                      if len(parts) >= 3 and parts[0] == 'frames':
-                          ep_name = '-'.join(parts[1:-2])
+                      if dir_name.startswith('frames-') and '-shard-' in dir_name:
+                          ep_name = dir_name[len('frames-'):dir_name.rfind('-shard-')]
                       else:
-                          ep_name = 'unknown'
+                          parts = dir_name.split('-')
+                          ep_name = '-'.join(parts[1:-2]) if len(parts) >= 3 and parts[0] == 'frames' else 'unknown'
 
                       if ep_name not in episodes_map:
                           episodes_map[ep_name] = []
@@ -247,9 +242,7 @@ jobs:
               for v in assembled_videos:
                   f.write(f\"file '{v}'\n\")
 
-          print('Concat list created:')
-          with open('concat_list.txt') as f:
-              print(f.read())
+          print('Concat list created successfully.')
           "
 
       - name: 6. Склейка всех эпизодов в единый мастер-фильм (-c copy)
@@ -282,4 +275,4 @@ jobs:
           TAG="movie-$(date +'%Y%m%d-%H%M%S')"
           gh release create "$TAG" "output/movie/${OUT_NAME}.mp4" \
             --title "${OUT_NAME} (${PROFILE}) - ${TAG}" \
-            --notes "Автоматическая сборка фильма с параллельным рендером на 20 шардах GitHub Actions." 
+            --notes "Автоматическая сборка фильма с параллельным рендером на шардах GitHub Actions."
