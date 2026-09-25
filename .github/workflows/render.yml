@@ -1,0 +1,116 @@
+name: Production 4K Cycles Render
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  render-shards:
+    name: Shard ${{ matrix.shard }} (Frames ${{ matrix.start }}-${{ matrix.end }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: 1
+            start: 1
+            end: 15
+          - shard: 2
+            start: 16
+            end: 30
+          - shard: 3
+            start: 31
+            end: 45
+          - shard: 4
+            start: 46
+            end: 60
+
+    steps:
+      - name: 1. Клонирование репозитория
+        uses: actions/checkout@v4
+
+      - name: 2. Настройка Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: 3. Установка системных библиотек
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1 libxxf86vm1 libxfixes3 libxi6 libxkbcommon0
+
+      - name: 4. Установка зависимостей
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 5. Рендер диапазона кадров шардом в 4K Cycles
+        run: |
+          python main.py \
+            --project test_studio \
+            --start ${{ matrix.start }} \
+            --end ${{ matrix.end }} \
+            --profile 4k \
+            --samples 64 \
+            --output output/frames
+
+      - name: 6. Загрузка кадров шарда в артефакты
+        uses: actions/upload-artifact@v4
+        with:
+          name: frames-shard-${{ matrix.shard }}
+          path: output/frames/*.png
+          retention-days: 2
+
+  assemble-video:
+    name: Final Assembly & Release (4K Master)
+    needs: render-shards
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: 1. Клонирование репозитория
+        uses: actions/checkout@v4
+
+      - name: 2. Установка FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: 3. Создание директории кадров
+        run: mkdir -p output/all_frames
+
+      - name: 4. Скачивание всех шардов
+        uses: actions/actions-download-artifact@v5
+        with:
+          path: output/downloaded_artifacts
+
+      - name: 5. Объединение кадров в одну папку
+        run: |
+          find output/downloaded_artifacts -name "*.png" -exec cp {} output/all_frames/ \;
+          echo "Всего кадров собрано: $(ls -1 output/all_frames/*.png | wc -l)"
+
+      - name: 6. Сборка финального 4K MP4 (H.264 Master, BT.709)
+        run: |
+          ffmpeg -y -framerate 60 -i output/all_frames/frame_%04d.png \
+            -c:v libx264 \
+            -preset slow \
+            -crf 14 \
+            -pix_fmt yuv420p \
+            -color_primaries bt709 \
+            -color_trc bt709 \
+            -colorspace bt709 \
+            3dvnosanim_4k_master.mp4
+
+      - name: 7. Публикация готового 4K-видео в GitHub Releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v1.0.0-infra-$(date +'%Y%m%d-%H%M%S')"
+          gh release create "$TAG" 3dvnosanim_4k_master.mp4 \
+            --title "3DVNOSANIM 4K Render ($TAG)" \
+            --notes "Первый успешный 4K Cycles рендер на инфраструктуре bpy с шардингом и AgX."
