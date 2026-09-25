@@ -19,7 +19,7 @@ on:
 jobs:
   preview:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
 
     steps:
       - name: 1. Клонирование репозитория
@@ -44,7 +44,7 @@ jobs:
           restore-keys: |
             assets-
 
-      - name: 5. Быстрый рендер превью-кадров (540p, Cycles CPU)
+      - name: 5. Быстрый рендер превью-кадров (540p, Cycles Turbo)
         run: |
           python main.py \
             --episode ${{ github.event.inputs.episode || 'ep01_bay' }} \
@@ -58,7 +58,7 @@ jobs:
         run: |
           mkdir -p output/video
           ffmpeg -y -framerate 30 -i output/frames/frame_%04d.png \
-            -c:v libx264 -pix_fmt yuv420p -preset fast -crf 20 \
+            -c:v libx264 -pix_fmt yuv420p -preset ultrafast -crf 22 \
             output/video/preview_${{ github.event.inputs.episode || 'ep01_bay' }}.mp4
 
       - name: 7. Загрузка готового MP4 в артефакты
@@ -66,4 +66,4 @@ jobs:
         with:
           name: preview-video
           path: output/video/preview_*.mp4
-          retentio n-days: 7
+          retention-days: 7
