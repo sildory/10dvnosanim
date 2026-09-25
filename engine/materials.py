@@ -1,4 +1,8 @@
-"""Модуль генерации физически корректных PBR-материалов, диэлектриков и неона в Blender."""
+"""
+Модуль физически корректных шейдеров (PBR, жидкости, стекло, неон).
+Строгое соблюдение закона диэлектриков: metallic = 0.0 для всех неметаллов.
+Мокрость поверхностей реализуется через Coat Weight и ультранизкую Roughness.
+"""
 
 import bpy
 from engine.assets import get_asset_manager
@@ -14,8 +18,7 @@ def make_pbr(
     filetype: str = "JPG"
 ) -> bpy.types.Material:
     """
-    Создает честный PBR-материал по набору карт ambientCG с соблюдением физики диэлектриков.
-    Мокрость задается слоем Coat (лак/вода) и пониженной Roughness, а НЕ параметром Metallic.
+    Создает PBR-материал по набору карт ambientCG с соблюдением физики диэлектриков.
     """
     mat = bpy.data.materials.new(name=material_name)
     mat.use_nodes = True
@@ -26,7 +29,7 @@ def make_pbr(
     node_out = nodes.new(type="ShaderNodeOutputMaterial")
     bsdf = nodes.new(type="ShaderNodeBsdfPrincipled")
 
-    # Координаты UV и масштабирование тайлинга
+    # Текстурные координаты и тайлинг
     node_coord = nodes.new(type="ShaderNodeTexCoord")
     node_mapping = nodes.new(type="ShaderNodeMapping")
     node_mapping.inputs["Scale"].default_value = (scale, scale, scale)
@@ -68,7 +71,7 @@ def make_pbr(
         links.new(node_mapping.outputs["Vector"], tex_rough.inputs["Vector"])
         links.new(tex_rough.outputs["Color"], bsdf.inputs["Roughness"])
     else:
-        bsdf.inputs["Roughness"].default_value = 0.35
+        bsdf.inputs["Roughness"].default_value = 0.45
 
     # 3. Рельеф: Normal Map и Micro-Displacement
     bump_target = bsdf.inputs["Normal"]
@@ -80,8 +83,8 @@ def make_pbr(
         links.new(node_mapping.outputs["Vector"], tex_disp.inputs["Vector"])
 
         node_bump = nodes.new(type="ShaderNodeBump")
-        node_bump.inputs["Strength"].default_value = 0.15
-        node_bump.inputs["Distance"].default_value = 0.1
+        node_bump.inputs["Strength"].default_value = 0.12
+        node_bump.inputs["Distance"].default_value = 0.08
         links.new(tex_disp.outputs["Color"], node_bump.inputs["Height"])
         links.new(node_bump.outputs["Normal"], bump_target)
         bump_target = node_bump.inputs["Normal"]
@@ -97,7 +100,7 @@ def make_pbr(
         links.new(tex_norm.outputs["Color"], node_norm_map.inputs["Color"])
         links.new(node_norm_map.outputs["Normal"], bump_target)
 
-    # 4. Metallic (жесткое разделение: металлы vs диэлектрики)
+    # 4. Строгий закон физики: неметаллы ВСЕГДА имеют metallic = 0.0
     if "metallic" in pbr_maps and is_metallic:
         tex_metal = nodes.new(type="ShaderNodeTexImage")
         tex_metal.image = bpy.data.images.load(pbr_maps["metallic"], check_existing=True)
@@ -107,7 +110,7 @@ def make_pbr(
     else:
         bsdf.inputs["Metallic"].default_value = 1.0 if is_metallic else 0.0
 
-    # 5. Водная глазурь (Coat): физический слой воды поверх диэлектрика
+    # 5. Слой лака/воды (Coat): создает физическую зеркальную водную пленку
     if "Coat Weight" in bsdf.inputs and not is_metallic:
         bsdf.inputs["Coat Weight"].default_value = wetness
         bsdf.inputs["Coat Roughness"].default_value = 0.02
@@ -116,8 +119,32 @@ def make_pbr(
     return mat
 
 
-def make_neon(material_name: str, color=(0.1, 0.8, 1.0), strength: float = 35.0) -> bpy.types.Material:
-    """Создает материал физически яркого газоразрядного неона."""
+def make_water(material_name: str = "Water_PBR", color=(0.015, 0.03, 0.05, 1.0), roughness: float = 0.02, ior: float = 1.333) -> bpy.types.Material:
+    """Создает физический материал глубокой воды со светопропусканием (Transmission)."""
+    mat = bpy.data.materials.new(name=material_name)
+    mat.use_nodes = True
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+    nodes.clear()
+
+    node_out = nodes.new(type="ShaderNodeOutputMaterial")
+    bsdf = nodes.new(type="ShaderNodeBsdfPrincipled")
+
+    bsdf.inputs["Base Color"].default_value = color
+    bsdf.inputs["Roughness"].default_value = roughness
+    bsdf.inputs["IOR"].default_value = ior
+    bsdf.inputs["Metallic"].default_value = 0.0
+
+    # Transmission в Blender 4.x
+    if "Transmission Weight" in bsdf.inputs:
+        bsdf.inputs["Transmission Weight"].default_value = 0.98
+
+    links.new(bsdf.outputs["BSDF"], node_out.inputs["Surface"])
+    return mat
+
+
+def make_neon(material_name: str, color=(0.1, 0.85, 1.0), strength: float = 40.0) -> bpy.types.Material:
+    """Создает материал яркого светящегося газоразрядного неона."""
     mat = bpy.data.materials.new(name=material_name)
     mat.use_nodes = True
     nodes = mat.node_tree.nodes
