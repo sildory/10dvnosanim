@@ -2,8 +2,22 @@
 
 import os
 import time
+import gc
 import bpy
 from engine.settings import apply_cycles_settings
+
+try:
+    import resource
+except ImportError:
+    resource = None
+
+
+def get_memory_usage_mb() -> float:
+    """Возвращает текущий объем потребляемой оперативной памяти (RSS) в мегабайтах."""
+    if resource is not None:
+        # ru_maxrss на Linux возвращается в килобайтах
+        return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
+    return 0.0
 
 
 def clear_scene():
@@ -35,6 +49,8 @@ def clear_scene():
     if bpy.context.scene:
         bpy.context.scene.timeline_markers.clear()
 
+    gc.collect()
+
 
 def update_camera_for_frame(scene: bpy.types.Scene, frame: int):
     """
@@ -56,6 +72,20 @@ def update_camera_for_frame(scene: bpy.types.Scene, frame: int):
                 break
 
 
+def free_frame_buffers():
+    """
+    Принудительно очищает внутренние буферы Render Result и композитора Blender,
+    предотвращая лавинообразное накопление памяти от кадра к кадру.
+    """
+    for img in list(bpy.data.images):
+        if img.type == "RENDER_RESULT" or "Render" in img.name or "Viewer" in img.name:
+            try:
+                img.buffers_free()
+            except Exception:
+                pass
+    gc.collect()
+
+
 def execute_render(
     scene: bpy.types.Scene,
     output_dir: str,
@@ -65,7 +95,7 @@ def execute_render(
     samples_override: int = None,
     step: int = 1
 ):
-    """Конфигурирует сцену и рендерит указанный диапазон кадров."""
+    """Конфигурирует сцену и рендерит указанный диапазон кадров с контролем утечек памяти."""
     os.makedirs(output_dir, exist_ok=True)
 
     apply_cycles_settings(scene, profile_name=profile_name, samples_override=samples_override)
@@ -97,10 +127,17 @@ def execute_render(
 
         scene.render.filepath = target_path
 
+        # Отрендерить кадр и записать на диск
         bpy.ops.render.render(write_still=True)
         frame_time = time.time() - frame_t0
         cam_name = scene.camera.name if scene.camera else "Unknown"
-        print(f"[CYCLES] Кадр {current_frame:04d}/{end_frame:04d} [{cam_name}] отрендерен за {frame_time:.2f} сек. -> {os.path.basename(target_path)}")
+
+        # Освобождение памяти композитора и промежуточных проходов
+        free_frame_buffers()
+        ram_mb = get_memory_usage_mb()
+
+        ram_info = f" (RAM: {ram_mb:.0f} MB)" if ram_mb > 0 else ""
+        print(f"[CYCLES] Кадр {current_frame:04d}/{end_frame:04d} [{cam_name}] за {frame_time:.2f} сек.{ram_info} -> {os.path.basename(target_path)}")
 
     total_time = time.time() - t_start
-    print(f"[ENGINE] Успешно! Диапазон отрендерен за {total_time:.1f} сек.\n")
+    print(f"[ENGINE] Успешно! Диапазон отрендерен за {total_time:.1f} сек.\n") 
