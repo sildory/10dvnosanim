@@ -22,7 +22,7 @@ permissions:
 
 jobs:
   # =========================================================================
-  # ЭТАП 1: Расчёт лёгких параллельных шардов (по ~18 кадров, защита от таймаута)
+  # ЭТАП 1: Расчёт лёгких параллельных шардов (по ~18 кадров)
   # =========================================================================
   plan-shards:
     name: "Plan Parallel Shards"
@@ -56,7 +56,6 @@ jobs:
               sys.exit(1)
 
           total_frames = 180
-          # Шард по 18 кадров гарантированно укладывается в 12-18 минут на CPU раннере
           TARGET_FRAMES_PER_SHARD = 18
           shards_per_ep = max(4, math.ceil(total_frames / TARGET_FRAMES_PER_SHARD))
 
@@ -82,7 +81,7 @@ jobs:
           "
 
   # =========================================================================
-  # ЭТАП 2: Параллельный рендер шардов (таймаут поднят до 120 минут)
+  # ЭТАП 2: Параллельный рендер шардов (10GB Swap + nice приоритет агента)
   # =========================================================================
   render-shards:
     name: "${{ matrix.episode }} [${{ matrix.start }}..${{ matrix.end }}]"
@@ -98,20 +97,29 @@ jobs:
       - name: 1. Клонирование репозитория
         uses: actions/checkout@v4
 
-      - name: 2. Настройка Python 3.11
+      - name: 2. Выделение 10GB Swap (Защита от OOM и разрыва соединения)
+        run: |
+          sudo swapoff -a || true
+          sudo fallocate -l 10G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=10240
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
+
+      - name: 3. Настройка Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
 
-      - name: 3. Установка системных библиотек и зависимостей bpy
+      - name: 4. Установка системных библиотек и зависимостей bpy
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends \
             libxxf86vm1 libgl1 libxfixes3 libxi6 libxkbcommon0
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: 4. Кэширование ассетов (HDRI / PBR)
+      - name: 5. Кэширование ассетов (HDRI / PBR)
         uses: actions/cache@v4
         with:
           path: assets_cache
@@ -119,9 +127,9 @@ jobs:
           restore-keys: |
             assets-
 
-      - name: 5. Рендер диапазона кадров шардом
+      - name: 6. Рендер диапазона кадров шардом (с защитой приоритета агента)
         run: |
-          python main.py \
+          nice -n 10 python main.py \
             --episode "${{ matrix.episode }}" \
             --start "${{ matrix.start }}" \
             --end "${{ matrix.end }}" \
@@ -129,7 +137,7 @@ jobs:
             --profile "${{ github.event.inputs.profile || 'preview' }}" \
             --output "output/frames/${{ matrix.episode }}"
 
-      - name: 6. Сохранение кадров шарда в артефакты
+      - name: 7. Сохранение кадров шарда в артефакты
         uses: actions/upload-artifact@v4
         with:
           name: "frames-${{ matrix.episode }}-shard-${{ matrix.shard }}"
@@ -275,4 +283,4 @@ jobs:
           TAG="movie-$(date +'%Y%m%d-%H%M%S')"
           gh release create "$TAG" "output/movie/${OUT_NAME}.mp4" \
             --title "${OUT_NAME} (${PROFILE}) - ${TAG}" \
-            --notes "Автоматическая сборка фильма с параллельным рендером на шардах GitHub Actions."
+            --notes "Автоматическая сборка фильма с параллельным рендером на шардах GitHub Actions." 
